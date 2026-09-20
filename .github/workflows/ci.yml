@@ -39,6 +39,36 @@
 #   因此这两个平台**只验证 C 层**（那正是本层手工内存管理所在，也是移植风险最集中的地方），
 #   并在 docs/benchmarks/ 的平台矩阵记录中如实标注覆盖范围。
 # ============================================================================
+# 【§11.3 的 24h soak：为什么不在这个文件里，以及应该在哪跑】
+# ============================================================================
+# 官方限制（GitHub Docs — Actions limits）：
+#   · GitHub **托管** runner：单作业最长 **6 小时**
+#   · **自托管** runner    ：单作业最长 **5 天**
+#   · 整个 workflow run    ：35 天
+#
+# 因此 24h 有两条可行路径，**都不是**"在托管 runner 上硬跑"：
+#
+#   ① 自托管 runner（若那台机器就是目标平台，这是最正确的选择）
+#      在一台常开机器上注册 self-hosted runner，然后在该作业上写
+#          runs-on: [self-hosted, linux, x64]
+#          timeout-minutes: 1500
+#      ★ 若这台机器**就是你要验收的硬件**，这条路径同时满足
+#        §11.2/§11.3「量化指标必须在目标平台判定」的要求 ——
+#        在别人家的 CI runner 上测出的 RSS 收敛，本来也不能作为目标平台的验收依据。
+#
+#   ② 任意常开机器上直接跑（不进 CI）
+#          tmux new -s soak
+#          bash scripts/soak.sh --seconds 86400
+#      支持随时 Ctrl-C 中断出**部分报告**（已采样数据保留），
+#      报告落在 docs/benchmarks/soak_24h.txt。
+#      注意：它跑的是 bench_cj，需要能构建仓颉侧（SDK）。
+#
+# ★ 本文件里的 soak 作业只做**回归护栏**（默认 3 分钟，可手动加长到 5h 以内）。
+#   它与 24h 验收的分工不可互相替代：
+#     · 回归护栏：每次改动都跑，抓"状态不收敛"的**新回归**（短、频繁）
+#     · 24h 验收：一次性、在目标平台、结果入库（长、稀疏）
+#   短跑抓不到"每 8 小时才长一次的泄漏"；而 24h 不可能每次 push 都跑。
+# ============================================================================
 
 name: ci
 
@@ -46,6 +76,15 @@ on:
   push:
     branches: [ main, master ]
   pull_request:
+  # ★ 手动触发：用于按需跑较长的 soak（见下方 soak 作业）。
+  #   为什么需要它 —— §11.3 要的 24h 在本文件里跑不了（原因写在 soak 作业上方），
+  #   但"跑一个几小时的收敛验证"是可行的，且必须由人按需触发（不适合每次 push）。
+  workflow_dispatch:
+    inputs:
+      soak_minutes:
+        description: 'soak 时长（分钟）。默认 3；要长跑可填 300（5h，GH 托管硬上限 6h）'
+        required: false
+        default: '3'
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -193,6 +232,71 @@ jobs:
   # ---------------------------------------------------------------------------
   # 交叉编译 aarch64（只编译，不运行）—— 可移植性回归
   # ---------------------------------------------------------------------------
+  # ---------------------------------------------------------------------------
+  # C 层长跑（收敛性回归护栏 + 手动长跑）
+  # ---------------------------------------------------------------------------
+  # ★★ 这个作业**不能**替代 §11.3 要求的 24h soak。原因写在下面，不要误读。★★
+  #
+  #   1. GitHub **托管** runner 的单作业硬上限是 **6 小时**（官方 Actions limits）。
+  #      24h 在托管 runner 上**无法完成**。自托管 runner 的上限是 **5 天**，
+  #      那才是真正跑 24h 的路径（见本文件末尾的说明）。
+  #
+  #   2. ★ 拆成 4 个 6h 作业**不是**替代方案。每个作业是一台全新 runner、
+  #      一个全新进程，而 soak 要测的正是「**同一进程**长时间运行之后」的
+  #      RSS 收敛与状态累积。重启恰好把被测对象重置了 ——
+  #      若存在「每 8 小时增长一次」的泄漏，4×6h **永远看不到**。
+  #      4 个 6h 的结论，不等于 1 个 24h 的结论。
+  #
+  #   所以本作业的定位是**回归护栏**：
+  #     · 每次 push/PR 跑一个短的（默认 3 分钟）——便宜，且能抓到
+  #       「状态不收敛」这类回归（t8 的两个缺陷都属于这一类）；
+  #     · 手动触发（Actions → Run workflow）时可指定任意时长，
+  #       受 6h 上限约束（建议 ≤300 分钟）。
+  #
+  #   它用**未插桩**（Release）的构建跑：要观察的是计数收敛，
+  #   而 ASan 的插桩开销会同时改变内存与时间特征。
+  #   ASan 覆盖已由 native 作业承担（那里用 8s 的 test_soak_asan）。
+  soak:
+    name: soak / c-inner-loop
+    runs-on: ubuntu-24.04
+    # 输入单位取**分钟**而不是秒：这样这里的算术是整数，不必依赖浮点取整。
+    # +30 是构建与 checkout 的余量。
+    timeout-minutes: ${{ fromJSON(inputs.soak_minutes || '3') + 30 }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake build-essential libsdl2-dev
+
+      - name: 缓存 LVGL 源码
+        uses: actions/cache@v4
+        with:
+          path: third_party/lvgl
+          key: lvgl-v9.2.2-soak
+
+      - name: 拉取 LVGL（锁定版本 v9.2.2）
+        run: bash scripts/fetch_lvgl.sh
+
+      - name: 构建（Release，未插桩）
+        run: |
+          cmake -S native -B build -DCMAKE_BUILD_TYPE=Release -DLVGLCJ_BUILD_TESTS=ON
+          cmake --build build -j"$(nproc)"
+
+      - name: 长跑（计数收敛断言）
+        env:
+          SDL_VIDEODRIVER: dummy
+        run: |
+          set -euo pipefail
+          MINS="${{ inputs.soak_minutes || '3' }}"
+          SECS=$(( MINS * 60 ))
+          echo "→ test_soak_asan --seconds ${SECS}（${MINS} 分钟）"
+          echo "  判据：每个周期清空后 alive/obj/anim_ctx 必须回到基线，"
+          echo "        INVALIDATED 不得超过有界回收上限"
+          ./build/bin/test_soak_asan --seconds "${SECS}"
+
   cross-aarch64:
     name: cross / aarch64（编译检查）
     runs-on: ubuntu-24.04

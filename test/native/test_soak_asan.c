@@ -269,6 +269,30 @@ static void one_unit(int round)
     }
 }
 
+/*
+ * 长跑进度：每隔一段时间打一行。
+ *
+ * ★ 为什么必须有它 —— 与 CI 里 ASan 步骤"先回显再做"是同一个教训：
+ *   本用例可以跑几小时（CI 手动触发、或本机 24h），
+ *   而在这之前它的输出是**开始时一行、结束时一行**。
+ *   于是「长时间没有输出」既可能是"正在正常跑"，也可能是"卡住了"，
+ *   看日志的人无从区分，只能干等 —— 而这恰恰是 24h 长跑最不能接受的。
+ *   打一行进度是极低成本，换来的是「在不在动」变成可观测事实。
+ *
+ * 间隔取 60 秒：3 分钟的 CI 冒烟只多 3 行，5 小时的长跑约 300 行，都可接受。
+ */
+static void maybe_progress(uint64_t *last_ms, uint64_t steps, const char *what)
+{
+    uint64_t t = now_ms();
+    if (t - *last_ms < 60000u) {
+        return;
+    }
+    *last_ms = t;
+    printf("  [%s] 已运行 %llu 步：alive=%d obj=%d anim_ctx=%d\n", what,
+           (unsigned long long)steps, lvglcj_handle_count(LVGLCJ_HSTATE_ALIVE),
+           lvglcj_obj_count(), lvglcj_anim_ctx_count());
+}
+
 /* ============================================================ 负载：随机序列 */
 
 /*
@@ -288,11 +312,13 @@ static void fuzz_loop(uint64_t deadline, uint64_t *steps_out)
     int pool_n = 0;
     int style_n = 0;
     uint64_t steps = 0;
+    uint64_t prog_ms = now_ms();
 
     memset(pool, 0, sizeof(pool));
     memset(styles, 0, sizeof(styles));
 
     while (now_ms() < deadline) {
+        maybe_progress(&prog_ms, steps, "fuzz");
         /* 每 5000 步彻底清空一次，制造可对账的稳态 */
         if (steps > 0 && steps % 5000 == 0) {
             for (int i = 0; i < pool_n; i++) {
@@ -488,7 +514,9 @@ int main(int argc, char **argv)
                (unsigned long long)steps, (unsigned long long)g_seed);
     } else {
         int round = 0;
+        uint64_t prog_ms = now_ms();
         while (now_ms() < deadline) {
+            maybe_progress(&prog_ms, steps, "确定");
             one_unit(round);
             steps++;
             /* 每 200 轮做一次完整对账（逐步对账太慢，且失败信息会刷屏） */
