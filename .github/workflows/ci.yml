@@ -54,6 +54,10 @@ jobs:
   native:
     name: native / ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
+    # ★ 作业级上限：GitHub 默认是 **360 分钟**，一个挂起能把 runner 空耗 6 小时。
+    #   本地全套（构建 + ctest + ASan）不到 5 分钟，45 分钟留了充足余量，
+    #   却能把"永久挂着"变成"45 分钟后明确失败"。
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -145,15 +149,39 @@ jobs:
           SDL_VIDEODRIVER: dummy
         run: |
           fail=0
+          # ★ 三点都是被"卡住"实际教会我们的，不是预防性写法：
+          #   1. **先回显再做**。原来把输出收进变量，日志在整步结束前不显示任何东西 ——
+          #      一旦某个用例挂起，看日志的人只知道"卡住了"，不知道卡在哪一个，
+          #      只能干等作业超时。现在每个用例开始前先打一行。
+          #   2. **每个用例有超时**。没有超时的话，一个挂起会拖着整个作业
+          #      直到 GitHub 的默认上限（6 小时）。
+          #   3. **报出用例耗时**。区分"慢"与"挂起"靠的是时间：
+          #      本地 x64 全套 ASan 仅 ~29s，因此某个用例若接近超时上限，
+          #      那不是慢，是真有问题。
+          PER_TEST_TIMEOUT=180
           for t in $(ls build-asan/bin | grep '^test_'); do
-            out=$(ASAN_OPTIONS=detect_leaks=1 ./build-asan/bin/"$t" 2>&1) || fail=1
+            echo "→ ${t}"
+            start=$SECONDS
+            set +e
+            out=$(ASAN_OPTIONS=detect_leaks=1 timeout "${PER_TEST_TIMEOUT}" ./build-asan/bin/"$t" 2>&1)
+            rc=$?
+            set -e
+            echo "  ${t} 用时 $(( SECONDS - start ))s（退出码 ${rc}）"
+
+            if [ "$rc" = "124" ]; then
+              echo "::error::${t} 超过 ${PER_TEST_TIMEOUT}s 未结束 —— 这是挂起，不是慢"
+              printf '%s\n' "$out" | tail -30
+              fail=1
+              continue
+            fi
+
             n=$(printf '%s' "$out" | grep -cE 'ERROR: (AddressSanitizer|LeakSanitizer)' || true)
             if [ "$n" != "0" ]; then
-              echo "::error::$t 有 $n 条 ASan 报告"
+              echo "::error::${t} 有 $n 条 ASan 报告"
               printf '%s\n' "$out" | grep -A15 'ERROR: ' | head -30
               fail=1
             fi
-            printf '%s' "$out" | grep -q '0 项失败' || { echo "::error::$t 有断言失败"; fail=1; }
+            printf '%s' "$out" | grep -q '0 项失败' || { echo "::error::${t} 有断言失败"; fail=1; }
           done
           exit $fail
 

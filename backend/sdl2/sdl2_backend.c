@@ -18,7 +18,7 @@
  *    超时不放行会让 LVGL 永久停在「等 flush 完成」，表现为界面卡死；
  *    而这比丢一帧严重得多。宁可丢帧 + 记 BACKEND_FAILURE，也不卡死。
  *
- * 4) 窗口关闭/最小化必须**主动 sem_post** 解锁等待方（§8.1.2 强制要求 3），
+ * 4) 窗口关闭/最小化必须**主动唤醒等待方**（§8.1.2 强制要求 3），
  *    否则等待方要等到超时才返回 —— 这正是 P0 断言 7 要测的东西。
  */
 #include "lvglcj_backend_sdl2.h"
@@ -26,7 +26,6 @@
 
 #include <SDL2/SDL.h>
 #include <pthread.h>
-#include <semaphore.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
@@ -46,7 +45,53 @@ static int64_t       g_display = LVGLCJ_HANDLE_NULL;
 /* 创建窗口的线程 = 渲染线程 = SDL 事件循环线程 */
 static _Atomic int64_t g_render_thread_tid = 0;
 
-static sem_t g_sem_done;               /* 渲染完成 / 主动解锁 */
+/*
+ * 「渲染完成 / 主动解锁」信号：用 **mutex + condvar + 标志** 实现，
+ * 而不是 POSIX 未命名信号量（sem_t）。
+ *
+ * ★ 为什么必须换掉（由 macOS CI 作业实测给出，不是预防性改动）：
+ *   · `sem_timedwait` 在 macOS 上**根本没有声明** ——
+ *     编译直接失败：call to undeclared function 'sem_timedwait'；
+ *   · 更根本的是：macOS **不支持未命名 POSIX 信号量** ——
+ *     `sem_init(..., pshared=0, ...)` 在运行期返回 ENOSYS。
+ *     也就是说即使绕过编译错误，这里的等待在 macOS 上也**永远不会被唤醒**，
+ *     只会在每次 flush 时白等到超时（表现为帧率塌掉而非报错）。
+ *   pthread 的 mutex/condvar 在 Linux / macOS / arm64 上都完整支持，
+ *   所以这不是"为了让 macOS 编过"的权宜改动，而是换成一个**真正可移植**的原语。
+ *
+ * 语义差异（已核对本处协议后确认可接受）：
+ *   · 信号量**计数**，标志**合并**：生产者若在无人等待时连续 post 多次，
+ *     信号量会攒下多个额度，而标志只记住"有一次"。
+ *   · 但本处的协议是「flush → 等渲染完成」的**请求/应答**，
+ *     同一时刻最多只有一个未决额度（等待方拿到即清零）。
+ *     因此二者在本协议下等价 —— 这也就是标志写法能成立的前提。
+ *     ★ 若将来改成"多生产者并发 post"，必须回到计数语义。
+ */
+static pthread_mutex_t g_done_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t  g_done_cond = PTHREAD_COND_INITIALIZER;
+static int             g_done_flag = 0;
+
+/* 复位额度（init/deinit 用）。静态初始化的 mutex/condvar 本身无需销毁。 */
+static void sdl2_reset_done(void)
+{
+    pthread_mutex_lock(&g_done_lock);
+    g_done_flag = 0;
+    pthread_mutex_unlock(&g_done_lock);
+}
+
+/*
+ * 唤醒正在等待的渲染方。
+ *
+ * ★ 窗口关闭/最小化路径上的这一句是**必需**的（§8.1.2 强制要求 3）：
+ *   没有它，正在 flush 里等待的 LVGL 线程会一直等到超时。
+ */
+static void sdl2_signal_done(void)
+{
+    pthread_mutex_lock(&g_done_lock);
+    g_done_flag = 1;
+    pthread_cond_signal(&g_done_cond);
+    pthread_mutex_unlock(&g_done_lock);
+}
 
 static _Atomic int g_paused = 0;          /* 窗口关闭或最小化 */
 static _Atomic int g_quit_requested = 0;  /* 请求退出主循环 */
@@ -77,7 +122,25 @@ static int sdl2_wait_done(int timeout_ms)
         deadline.tv_sec += 1;
         deadline.tv_nsec -= 1000000000L;
     }
-    return (sem_timedwait(&g_sem_done, &deadline) == 0) ? 0 : -1;
+
+    int rc = -1;
+    pthread_mutex_lock(&g_done_lock);
+    /*
+     * 用 while 而不是 if：condvar 允许**虚假唤醒**，
+     * 被唤醒后必须重新检查条件。写成 if 会在虚假唤醒时误判为"渲染完成"，
+     * 于是 flush 提前返回、画面撕裂 —— 而且只在特定平台上偶发，极难复现。
+     */
+    while (g_done_flag == 0) {
+        if (pthread_cond_timedwait(&g_done_cond, &g_done_lock, &deadline) != 0) {
+            break; /* 超时或出错：与旧实现 sem_timedwait 非 0 时同样返回 -1 */
+        }
+    }
+    if (g_done_flag != 0) {
+        g_done_flag = 0; /* 消费这一次额度 */
+        rc = 0;
+    }
+    pthread_mutex_unlock(&g_done_lock);
+    return rc;
 }
 
 static int sdl2_on_render_thread(void)
@@ -126,7 +189,7 @@ static void sdl2_render_now(void)
 
 /*
  * 标记暂停并解锁等待方。
- * ★ sem_post 是必需的：没有它，正在 flush 里等待的 LVGL 线程
+ * ★ 这次唤醒是必需的：没有它，正在 flush 里等待的 LVGL 线程
  *   要等到 100ms 超时才返回（断言 7 要的正是「立即返回」）。
  */
 static void sdl2_mark_paused(int quit)
@@ -135,7 +198,7 @@ static void sdl2_mark_paused(int quit)
     if (quit) {
         atomic_store(&g_quit_requested, 1);
     }
-    sem_post(&g_sem_done);
+    sdl2_signal_done();
 }
 
 /* ------------------------------------------------------------ flush sink */
@@ -308,7 +371,8 @@ int32_t lvglcj_sdl2_init(int32_t w, int32_t h, int32_t color_format, int32_t buf
         return LVGLCJ_ERR_BACKEND_FAILURE;
     }
 
-    sem_init(&g_sem_done, 0, 0);
+    /* 复位「渲染完成」额度：不要继承上一次 init 的未决额度 */
+    sdl2_reset_done();
     atomic_store(&g_paused, 0);
     atomic_store(&g_quit_requested, 0);
     atomic_store(&g_pending, 0);
@@ -387,7 +451,11 @@ int32_t lvglcj_sdl2_deinit(void)
     }
     SDL_QuitSubSystem(SDL_INIT_VIDEO);
 
-    sem_destroy(&g_sem_done);
+    /*
+     * 静态初始化的 mutex/condvar 不需要销毁（它们没有内核资源），
+     * 只把额度清零，避免下一次 init 继承本次遗留的未决额度。
+     */
+    sdl2_reset_done();
     lvglcj_waitgraph_set_render_thread(0);
     atomic_store(&g_render_thread_tid, 0);
     g_tex_w = 0;
@@ -435,7 +503,7 @@ int32_t lvglcj_sdl2_poll_events(void)
             }
             sdl2_render_now();
             atomic_store(&g_pending, 0);
-            sem_post(&g_sem_done);
+            sdl2_signal_done();
         } else if (ev.type == SDL_QUIT) {
             sdl2_mark_paused(1);
         } else if (ev.type == SDL_WINDOWEVENT) {
