@@ -163,7 +163,12 @@ jobs:
             echo "→ ${t}"
             start=$SECONDS
             set +e
-            out=$(ASAN_OPTIONS=detect_leaks=1 timeout "${PER_TEST_TIMEOUT}" ./build-asan/bin/"$t" 2>&1)
+            # ★ `-k 10`：超时后先 SIGTERM，10 秒后升级为 SIGKILL。
+            #   只用 timeout 的话，被卡住的进程若不响应 SIGTERM（阻塞在系统调用里、
+            #   或信号被丢给不处理它的线程）会让 timeout 自己也一直等下去 ——
+            #   那就等于没有超时。这一点是在 arm64 上实测到的：
+            #   加了 180s 超时后该步骤仍然持续 12 分钟以上。
+            out=$(ASAN_OPTIONS=detect_leaks=1 timeout -k 10 "${PER_TEST_TIMEOUT}" ./build-asan/bin/"$t" 2>&1)
             rc=$?
             set -e
             echo "  ${t} 用时 $(( SECONDS - start ))s（退出码 ${rc}）"
