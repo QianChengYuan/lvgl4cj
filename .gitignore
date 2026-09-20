@@ -1,0 +1,39 @@
+# ---- 构建产物 ----
+build/
+target/
+libs/
+*.o
+*.a
+*.so
+*.so.*
+*.dylib
+*.dll
+*.lib
+*.obj
+*.exe
+
+# ---- 仓颉 ----
+*.cjo
+*.cjb
+*.macrocall
+.cjpm/
+cjpm.lock
+
+# ---- 生成物（由 scripts/gen_conf_const.py 产出，不入库） ----
+src/generated/conf_const.cj
+
+# ---- 第三方（由 scripts/fetch_lvgl.sh 拉取固定 tag） ----
+third_party/lvgl/
+
+# ---- 编辑器 / IDE ----
+.vscode/
+.idea/
+.cache/
+compile_commands.json
+
+# ---- 其他 ----
+*.log
+*.tmp
+*.bak
+*.swp
+__pycache__/

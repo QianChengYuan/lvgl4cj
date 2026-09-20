@@ -1,0 +1,19 @@
+# ============================================================================
+# V3 探针 —— 仓颉轻量级线程的 OS 亲和性
+#
+# 只依赖 lvglcj_probe_os_tid()（gettid 封装），不需要 LVGL，因此不链接 liblvgl。
+# ============================================================================
+[package]
+  cjc-version = "1.1.0"
+  name        = "v3_affinity"
+  version     = "0.1.0"
+  output-type = "executable"
+
+  src-dir    = "src"
+  target-dir = "target"
+
+  compile-option = "-Woff unused"
+  link-option    = "-L../../libs -llvgl4cj_probe -llvgl4cj_bridge -llvgl -lpthread -lm"
+
+[dependencies]
+  lvgl4cj = { path = "../.." }

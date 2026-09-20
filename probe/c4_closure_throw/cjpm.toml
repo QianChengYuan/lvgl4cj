@@ -1,0 +1,26 @@
+# ============================================================================
+# C4 缺陷最小复现工程
+#
+# 目的：把「回调闭包抛异常后再分发导致 SIGSEGV」从 cjpm test 框架里**剥离出来**，
+#       用独立的普通可执行程序复现，从而排除测试框架（M:N 线程、输出捕获、
+#       生命周期钩子）作为干扰变量，并为 cjdb/gdb 下的栈回溯提供干净的靶子。
+#
+# 用法： bash scripts/repro_c4.sh <scenario>
+#   same_cid      同一 cid 连续抛异常（原始复现）
+#   diff_cids     不同 cid 各抛一次
+#   normal_after  同一 cid 抛一次 → 再分发正常闭包
+# ============================================================================
+[package]
+  cjc-version = "1.1.0"
+  name        = "c4_closure_throw"
+  version     = "0.1.0"
+  output-type = "executable"
+
+  src-dir    = "src"
+  target-dir = "target"
+
+  compile-option = "-Woff unused"
+  link-option    = "-L../../libs -llvgl4cj_bridge -llvgl -lpthread -lm"
+
+[dependencies]
+  lvgl4cj = { path = "../.." }

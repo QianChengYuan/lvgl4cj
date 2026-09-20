@@ -1,0 +1,267 @@
+# ============================================================================
+# CI —— 平台矩阵（设计文档 §10.4）
+#
+# ============================================================================
+# ★★ 先说清楚这份配置**能**与**不能**验证什么（不要把矩阵当成等价验证）
+# ============================================================================
+#
+# 【矩阵的真实能力】
+#   · native-ubuntu-x64      : 全量 —— C 侧构建/单测/ASan + 仓颉侧 cjpm build/test、
+#                              cjlint 零告警、cjfmt 零 diff
+#   · native-ubuntu-arm64    : C 侧原生编译与 ctest（真跑，非模拟）
+#   · native-macos-arm64     : C 侧原生编译与 ctest（真跑）
+#   · cross-aarch64-check    : x86 上交叉编译 aarch64（只编译、不运行）
+#
+# 【关键限制：仓颉 SDK 无法在本仓库内自动获取】
+#   矩阵里的**仓颉侧步骤只在 SDK 可用时执行**。SDK 需要由使用方提供。
+#   这不是「静默跳过」：
+#     · 未启用时，相关 job 在矩阵里显示为 **skipped**（不是 passed）；
+#     · 启用后必须真的跑通 —— 脚本里的每条检查都是硬失败（set -e + 非零退出）。
+#   为什么不做「下载一个公开包兜底」：那会把「CI 通过」建立在一个
+#   与本地开发所用不确定是否同版本的 SDK 上，比直接显示 skipped 更危险。
+#
+# ★★ 首次启用前，需在本仓库配置两项（Settings → Secrets and variables → Actions）：
+#     Variables : ENABLE_CANGJIE_JOB = true      ← 开关（可公开，仅表示"启不启用"）
+#     Secrets   : CANGJIE_SDK_URL   = <下载地址>  ← 地址本体
+#
+#   **为什么拆成两个**：下载地址通常带签名参数（如 objectKey），属临时凭据，
+#   `vars` 会明文出现在日志里，所以地址必须走 `secrets`；
+#   而 GitHub 不允许 `secrets` 出现在 job 级 `if:` 条件里（那是配置期的判断），
+#   因此启用与否由 `vars` 里的布尔开关决定。这是一个必须拆开的组合，
+#   不是冗余设计。
+#
+#   **地址有时效**：签名过期后 CI 会在下载步骤明确报错（并提示该配置哪个 Secret），
+#   届时只需更新 Secret —— 不必改本文件，也不必改代码。
+#
+# 【arm64 / macOS 上的仓颉侧为什么不跑】
+#   macOS 与 linux-arm64 的仓颉 SDK 同样需要外部提供；且即便提供，
+#   LVGL 的 SDL2 后端在 macOS 上的构建方式不同（需 SDL2.framework 或 brew 的 SDL2）。
+#   因此这两个平台**只验证 C 层**（那正是本层手工内存管理所在，也是移植风险最集中的地方），
+#   并在 docs/benchmarks/ 的平台矩阵记录中如实标注覆盖范围。
+# ============================================================================
+
+name: ci
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # C 层构建 + 单测 + ASan（原生编译，真跑）
+  # ---------------------------------------------------------------------------
+  native:
+    name: native / ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: ubuntu-x64
+            os: ubuntu-24.04
+            asan: true
+          - name: ubuntu-arm64
+            os: ubuntu-24.04-arm
+            asan: true
+          - name: macos-arm64
+            os: macos-14
+            # macOS 上 ASan 可用，但本仓库暂无该平台的基线数据，
+            # 因此先只做构建 + 单测；ASan 待基线补齐后再纳入
+            asan: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装依赖（Linux）
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake build-essential libsdl2-dev
+
+      - name: 安装依赖（macOS）
+        if: runner.os == 'macOS'
+        run: brew install cmake sdl2
+
+      - name: 配置（Debug + 单测）
+        run: |
+          cmake -S native -B build \
+                -DCMAKE_BUILD_TYPE=Debug \
+                -DLVGLCJ_BUILD_TESTS=ON
+
+      - name: 构建
+        run: cmake --build build -j
+
+      - name: C 单测
+        env:
+          SDL_VIDEODRIVER: dummy
+        run: ctest --test-dir build --output-on-failure
+
+      # ---- ASan：本层手工内存管理的主要防线（§9.5）----
+      - name: 构建（ASan）
+        if: matrix.asan
+        run: |
+          cmake -S native -B build-asan \
+                -DCMAKE_BUILD_TYPE=Debug \
+                -DLVGLCJ_BUILD_TESTS=ON \
+                -DLVGLCJ_BUILD_PROBES=ON \
+                -DLVGLCJ_ASAN=ON
+          cmake --build build-asan -j
+
+      - name: ASan 工具自证（证明 ASan 真的在工作）
+        if: matrix.asan
+        run: |
+          # 「零报告」只有在工具确实生效时才有意义。V4 探针人为泄漏 1234 字节，
+          # 必须被报出且以非零码退出；否则说明 ASan 没被启用，门禁是假的。
+          set +e
+          ASAN_OPTIONS=detect_leaks=1 ./build-asan/bin/probe_v4_asan leak > v4.log 2>&1
+          rc=$?
+          set -e
+          if [ "$rc" -eq 0 ]; then echo "ASan 自证失败：人为泄漏未被报出"; cat v4.log; exit 1; fi
+          grep -q "LeakSanitizer: detected memory leaks" v4.log || { cat v4.log; exit 1; }
+
+      - name: ASan 单测（零报告）
+        if: matrix.asan
+        env:
+          SDL_VIDEODRIVER: dummy
+        run: |
+          fail=0
+          for t in $(ls build-asan/bin | grep '^test_'); do
+            out=$(ASAN_OPTIONS=detect_leaks=1 ./build-asan/bin/"$t" 2>&1) || fail=1
+            n=$(printf '%s' "$out" | grep -cE 'ERROR: (AddressSanitizer|LeakSanitizer)' || true)
+            if [ "$n" != "0" ]; then
+              echo "::error::$t 有 $n 条 ASan 报告"
+              printf '%s\n' "$out" | grep -A15 'ERROR: ' | head -30
+              fail=1
+            fi
+            printf '%s' "$out" | grep -q '0 项失败' || { echo "::error::$t 有断言失败"; fail=1; }
+          done
+          exit $fail
+
+  # ---------------------------------------------------------------------------
+  # 交叉编译 aarch64（只编译，不运行）—— 可移植性回归
+  # ---------------------------------------------------------------------------
+  cross-aarch64:
+    name: cross / aarch64（编译检查）
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装交叉工具链
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake gcc-aarch64-linux-gnu libc6-dev-arm64-cross
+
+      - name: 交叉构建（SDL2 关闭：本矩阵不引入 arm64 的 SDL2）
+        run: |
+          # 这条与 native-ubuntu-arm64 是**互补**关系，不是重复：
+          #   · 这里验证「在只有 x86 工具链的机器上也能为 arm64 构建」，
+          #     以及编译器层面没有 x86 专属假设（内联汇编、SIMD intrinsic 等）；
+          #   · arm64 runner 上则真跑 ctest，验证运行期行为。
+          # 两者都保留：交叉构建能在 PR 的每一次提交上快速给出信号。
+          cmake -S native -B build-arm64 \
+                -DCMAKE_TOOLCHAIN_FILE="$PWD/native/cmake/aarch64-linux-gnu.cmake" \
+                -DLVGLCJ_BUILD_SDL2=OFF \
+                -DLVGLCJ_BUILD_NULL_BACKEND=ON \
+                -DLVGLCJ_BUILD_TESTS=ON
+          cmake --build build-arm64 -j
+
+      - name: 确认产物确为 aarch64
+        run: |
+          file build-arm64/bin/test_leak | grep -q 'ARM aarch64' \
+            || { echo "::error::产物不是 aarch64"; file build-arm64/bin/*; exit 1; }
+
+  # ---------------------------------------------------------------------------
+  # 仓颉侧：构建 / 单测 / cjlint 零告警 / cjfmt 零 diff / 性能回归护栏
+  # 仅在 CANGJIE_SDK_URL 已配置时执行（见文件头说明）
+  # ---------------------------------------------------------------------------
+  cangjie:
+    name: cangjie / ubuntu-x64
+    runs-on: ubuntu-24.04
+    # ★ 用 vars 里的**开关**判断是否启用，而不是用 URL 本身 —— 因为
+    #   URL 必须放进 secrets（见下），而 GitHub 不允许 secrets 出现在 job 级 if: 里。
+    #   需要先在本仓库配置： Variables 里加 ENABLE_CANGJIE_JOB=true，
+    #                        Secrets 里加 CANGJIE_SDK_URL=<下载地址>
+    if: vars.ENABLE_CANGJIE_JOB == 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake build-essential libsdl2-dev
+
+      # ---- 仓颉 SDK（约 385 MB）------------------------------------------
+      # ★ 必须缓存：不缓存的话每次 push 都要重下近 400 MB，
+      #   而 CI 的时间预算主要会花在这上面，不是花在测试上。
+      #   key 刻意**不用 URL**：URL 是机密且是临时签名的，写进 key 既泄露又必然失效。
+      #   改用「SDK 版本 + runner」，SDK 升级时改这个版本号即可。
+      - name: 缓存仓颉 SDK
+        id: sdk-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/cangjie
+          key: cangjie-sdk-linux-x64-1.1.0
+
+      - name: 下载并解包仓颉 SDK
+        if: steps.sdk-cache.outputs.cache-hit != 'true'
+        env:
+          SDK_URL: ${{ secrets.CANGJIE_SDK_URL }}
+        run: |
+          set -euo pipefail
+          # ★ 链接放在 secrets 里，由 Actions 自动打码。
+          #   这类下载地址通常带签名参数（如 objectKey），一旦写进仓库文件就是凭据泄露；
+          #   而且它是**有时效**的 —— 过期后只需更新这个 Secret，不必改代码。
+          if [ -z "${SDK_URL}" ]; then
+            echo "::error::secret CANGJIE_SDK_URL 未配置（Settings → Secrets and variables → Actions）"
+            exit 1
+          fi
+          curl -fL --retry 3 --retry-delay 5 "${SDK_URL}" -o /tmp/cangjie-sdk.tar.gz
+          ls -lh /tmp/cangjie-sdk.tar.gz
+          mkdir -p "$HOME/cangjie"
+          tar -xzf /tmp/cangjie-sdk.tar.gz -C "$HOME/cangjie"
+
+      - name: 定位 SDK 并导出 CANGJIE_HOME
+        run: |
+          set -euo pipefail
+          # ★ 不假设压缩包解开后的目录层级：直接找「哪个目录里有 bin/cjc」。
+          #   假设结构会在上游调整打包方式时静默失效；而失败时把实际层级打出来，
+          #   能省掉一轮"猜它解到哪了"。
+          CJC="$(find "$HOME/cangjie" -maxdepth 5 -type f -name cjc -path '*/bin/*' | head -1)"
+          if [ -z "${CJC}" ]; then
+            echo "::error::在 ~/cangjie 下找不到 bin/cjc。实际层级："
+            find "$HOME/cangjie" -maxdepth 3 -type d | head -20
+            exit 1
+          fi
+          CH="$(dirname "$(dirname "${CJC}")")"
+          echo "CANGJIE_HOME=${CH}" >> "$GITHUB_ENV"
+          # ★ cjpm 在 tools/bin（不是 bin），两个都要进 PATH
+          echo "${CH}/bin" >> "$GITHUB_PATH"
+          echo "${CH}/tools/bin" >> "$GITHUB_PATH"
+          echo "SDK 位置：${CH}"
+
+      - name: SDK 自检（工具链真的能跑）
+        run: |
+          set -euo pipefail
+          export LD_LIBRARY_PATH="${CANGJIE_HOME}/tools/lib:${CANGJIE_HOME}/runtime/lib/linux_x86_64_cjnative:${LD_LIBRARY_PATH:-}"
+          cjc --version
+          # cjpm 来自 tools/bin —— 若没进 PATH 会在这里立刻失败，而不是等到后面
+          command -v cjpm
+          cjpm --version || true
+
+      - name: C 层构建（供仓颉侧链接）
+        run: bash scripts/build_native.sh
+
+      - name: 门禁（cjfmt / cjlint / build / test / ctest / ASan）
+        run: bash scripts/gate.sh
+
+      - name: 性能采集（WSL/CI 数字仅供参考，不作判定）
+        env:
+          SDL_VIDEODRIVER: dummy
+        run: |
+          (cd examples/bench_cj && cjpm build)
+          bash scripts/perf.sh --out perf-report.txt || true
+          cat perf-report.txt

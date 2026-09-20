@@ -1,0 +1,45 @@
+# ============================================================================
+# lvgl4cj —— 仓颉语言 LVGL v9 绑定库
+#
+# 本文件只包含仓颉官方 cjpm 认可的字段，确保 cjpm 解析零警告。
+# 配置模式照抄本机可正常构建的同语言绑定工程 CJQT6/cjpm.toml：
+#   · 用 [package].link-option + [target.<triple>].link-option 指定 C 库
+#     （**不用** [ffi.c] 的 path/clink 数组写法 —— 那不是 cjpm 的语法）
+#   · cjc-version 与本机 SDK 一致（1.1.0）
+#
+# C 库位置约定：scripts/build_native.sh 会把产物同步到 <工程根>/libs/
+#   liblvgl.a、liblvgl4cj_bridge.a
+# ============================================================================
+
+[package]
+  cjc-version = "1.1.0"
+  name        = "lvgl4cj"
+  version     = "0.1.0"
+  output-type = "static"
+
+  description = "仓颉语言对 LVGL v9 的安全 C ABI 绑定"
+  authors     = ["lvgl4cj Team"]
+  license     = "Apache-2.0"
+  tag         = ["gui", "lvgl", "embedded", "hm i", "ffi"]
+  category    = "gui"
+
+  src-dir    = "src"
+  target-dir = "target"
+
+  compile-option = "-Woff unused"
+  # -Llibs 相对「执行 cjpm 的包根目录」；libs/ 由 scripts/build_native.sh 生成
+  link-option    = "-Llibs -llvgl4cj_backend_sdl2 -llvgl4cj_backend_null -llvgl4cj_bridge -llvgl -lSDL2 -lpthread -lm"
+
+[dependencies]
+
+[test-dependencies]
+
+# --------------------------------------------------------------- 平台分叉
+# 三元组可用 `cjc -v` 查看
+[target.x86_64-unknown-linux-gnu]
+  compile-option = ""
+  link-option    = "-Llibs -llvgl4cj_backend_sdl2 -llvgl4cj_backend_null -llvgl4cj_bridge -llvgl -lSDL2 -lpthread -lm"
+
+[target.aarch64-unknown-linux-gnu]
+  compile-option = ""
+  link-option    = "-Llibs -llvgl4cj_backend_sdl2 -llvgl4cj_backend_null -llvgl4cj_bridge -llvgl -lpthread -lm"

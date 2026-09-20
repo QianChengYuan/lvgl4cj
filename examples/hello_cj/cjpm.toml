@@ -1,0 +1,28 @@
+# ============================================================================
+# hello_cj —— lvgl4cj 的第一个可交付物（设计文档 §17）
+#
+# 最终形态：SDL2 窗口 800×480，深色背景，中间一个按钮；
+#           点击按钮，文字从「点我」变成「点了 N 次」；退出干净释放。
+#
+# link-option 用相对路径 ../../libs（相对本目录），
+# 因此请在 examples/hello_cj 目录下执行 cjpm 命令。
+# ============================================================================
+[package]
+  cjc-version = "1.1.0"
+  name        = "hello_cj"
+  version     = "0.1.0"
+  output-type = "executable"
+
+  src-dir    = "src"
+  target-dir = "target"
+
+  compile-option = "-Woff unused"
+  # 静态库顺序：被依赖者在前（后端依赖 bridge，bridge 依赖 lvgl）
+  link-option    = "-L../../libs -llvgl4cj_backend_sdl2 -llvgl4cj_backend_null -llvgl4cj_bridge -llvgl -lSDL2 -lpthread -lm"
+
+[dependencies]
+  lvgl4cj = { path = "../.." }
+
+[target.x86_64-unknown-linux-gnu]
+  compile-option = ""
+  link-option    = "-L../../libs -llvgl4cj_backend_sdl2 -llvgl4cj_backend_null -llvgl4cj_bridge -llvgl -lSDL2 -lpthread -lm"

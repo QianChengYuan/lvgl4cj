@@ -1,0 +1,21 @@
+# ============================================================================
+# V1 探针 —— 「C 创建的 OS 线程能否执行仓颉代码」
+#
+# 这是方案 A（C 侧 pthread 跑 LVGL 主循环）与方案 C（泵模式）的**分叉闸门**。
+# 必须在 WSL 内运行；run_probe.sh 会用 timeout 包住它，
+# 因为 V1 的失败模式之一是「直接段错误/挂死」——那本身就是结论。
+# ============================================================================
+[package]
+  cjc-version = "1.1.0"
+  name        = "v1_thread_attach"
+  version     = "0.1.0"
+  output-type = "executable"
+
+  src-dir    = "src"
+  target-dir = "target"
+
+  compile-option = "-Woff unused"
+  link-option    = "-L../../libs -llvgl4cj_probe -llvgl4cj_bridge -llvgl -lpthread -lm"
+
+[dependencies]
+  lvgl4cj = { path = "../.." }

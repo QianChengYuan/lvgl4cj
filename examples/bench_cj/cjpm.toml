@@ -1,0 +1,33 @@
+# ============================================================================
+# bench_cj —— 性能基准与压力负载的**采集工具**（设计文档 §11.2 / §11.3 / §11.4）
+#
+# 为什么它不是测试用例：
+#   1. 仓颉测试框架会接管 stdout/stderr，测量结果无法从测试里输出
+#      （实测 println 与 eprintln 都抓不到），而产不出数字的基准没有意义；
+#   2. soak 要跑数分钟到 24 小时，放进 `cjpm test` 会把门禁拖垮；
+#   3. 启动时间的「冷启动」数值需要外部计时（/usr/bin/time），测试进程内测不到。
+#   因此测量逻辑放在库（src/bench.cj 的 LvBench），本工程只是它的命令行外壳。
+#   src/perf_test.cj 则复用同一份逻辑做**宽松回归护栏**，两者口径不会分叉。
+#
+# link-option 用相对路径 ../../libs（相对本目录），
+# 因此请在 examples/bench_cj 目录下执行 cjpm 命令。
+# ============================================================================
+[package]
+  cjc-version = "1.1.0"
+  name        = "bench_cj"
+  version     = "0.1.0"
+  output-type = "executable"
+
+  src-dir    = "src"
+  target-dir = "target"
+
+  compile-option = "-Woff unused"
+  # 静态库顺序：被依赖者在前（后端依赖 bridge，bridge 依赖 lvgl）
+  link-option    = "-L../../libs -llvgl4cj_backend_sdl2 -llvgl4cj_backend_null -llvgl4cj_bridge -llvgl -lSDL2 -lpthread -lm"
+
+[dependencies]
+  lvgl4cj = { path = "../.." }
+
+[target.x86_64-unknown-linux-gnu]
+  compile-option = ""
+  link-option    = "-L../../libs -llvgl4cj_backend_sdl2 -llvgl4cj_backend_null -llvgl4cj_bridge -llvgl -lSDL2 -lpthread -lm"
