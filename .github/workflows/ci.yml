@@ -259,9 +259,17 @@ jobs:
   soak:
     name: soak / c-inner-loop
     runs-on: ubuntu-24.04
-    # 输入单位取**分钟**而不是秒：这样这里的算术是整数，不必依赖浮点取整。
-    # +30 是构建与 checkout 的余量。
-    timeout-minutes: ${{ fromJSON(inputs.soak_minutes || '3') + 30 }}
+    # ★ 这里刻意用**固定值**，不引用 workflow_dispatch 的输入。
+    #
+    #   原因（实测踩到）：`inputs` 上下文只在 workflow_dispatch 下存在，
+    #   而**作业级 timeout-minutes 是在调度期求值的** —— push 触发时该上下文不可用，
+    #   整个 run 会在 0 秒直接失败，报「workflow file issue」，
+    #   既不产生日志也不产生 job，排查起来毫无线索。
+    #   （同一个坑也适用于任何作业级字段：timeout-minutes / runs-on / if 都不要引用 inputs。）
+    #
+    #   90 分钟 = 手动长跑的最大允许时长（75 分钟）留出构建余量。
+    #   "挂起"由 run 步骤里的 shell `timeout` 兜住（见下），不依赖这个值。
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
@@ -290,12 +298,18 @@ jobs:
           SDL_VIDEODRIVER: dummy
         run: |
           set -euo pipefail
-          MINS="${{ inputs.soak_minutes || '3' }}"
+          # ★ 用 `github.event.inputs` 而不是 `inputs`：前者在 push/PR 事件下
+          #   渲染为空字符串（配合 || 取默认值），后者在非 dispatch 事件下不存在。
+          MINS="${{ github.event.inputs.soak_minutes || '3' }}"
           SECS=$(( MINS * 60 ))
           echo "→ test_soak_asan --seconds ${SECS}（${MINS} 分钟）"
           echo "  判据：每个周期清空后 alive/obj/anim_ctx 必须回到基线，"
           echo "        INVALIDATED 不得超过有界回收上限"
-          ./build/bin/test_soak_asan --seconds "${SECS}"
+          # ★ 外层再包一个 shell timeout（时长 + 5 分钟余量）：
+          #   作业级 timeout-minutes 是固定的安全网，用它兜"挂起"会让一次挂起
+          #   白占 90 分钟。这里按**本次实际时长**兜，挂起时几分钟内就明确失败。
+          #   -k 保证信号无效时升级为 SIGKILL（arm64 上实测过 SIGTERM 杀不动的情况）。
+          timeout -k 15 $(( SECS + 300 )) ./build/bin/test_soak_asan --seconds "${SECS}"
 
   cross-aarch64:
     name: cross / aarch64（编译检查）
