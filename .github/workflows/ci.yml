@@ -84,6 +84,24 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install cmake sdl2
 
+      # ---- LVGL 源码（约 200 MB，**不入库**，必须现拉）----------------------
+      # ★ 这一步不能省：third_party/lvgl/ 被 .gitignore 排除（体积原因），
+      #   克隆后它是不存在的，而 CMakeLists 会在配置阶段直接 FATAL_ERROR
+      #   （"未找到 LVGL 源码……请先执行 bash scripts/fetch_lvgl.sh"）。
+      #   也就是说：**没有这一步，整个 native 矩阵在第一次 push 就全红**。
+      #   缓存能省掉每次 200 MB 的克隆；key 里带 runner.os 是因为
+      #   不同 OS 上进 cache 的内容虽然同源，但分开更不容易互相污染。
+      - name: 缓存 LVGL 源码
+        uses: actions/cache@v4
+        with:
+          path: third_party/lvgl
+          key: lvgl-v9.2.2-${{ runner.os }}
+
+      - name: 拉取 LVGL（锁定版本 v9.2.2）
+        # 默认仓库是 gitee 镜像（fetch_lvgl.sh 里可用 LVGLCJ_LVGL_REPO 覆盖），
+        # 脚本自身按 tag 校验，重复执行是幂等的，因此缓存命中时它会直接跳过克隆。
+        run: bash scripts/fetch_lvgl.sh
+
       - name: 配置（Debug + 单测）
         run: |
           cmake -S native -B build \
@@ -153,6 +171,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             cmake gcc-aarch64-linux-gnu libc6-dev-arm64-cross
+
+      - name: 缓存 LVGL 源码
+        uses: actions/cache@v4
+        with:
+          path: third_party/lvgl
+          key: lvgl-v9.2.2-cross-aarch64
+
+      - name: 拉取 LVGL（锁定版本 v9.2.2）
+        run: bash scripts/fetch_lvgl.sh
 
       - name: 交叉构建（SDL2 关闭：本矩阵不引入 arm64 的 SDL2）
         run: |
@@ -252,8 +279,22 @@ jobs:
           command -v cjpm
           cjpm --version || true
 
+      - name: 缓存 LVGL 源码
+        uses: actions/cache@v4
+        with:
+          path: third_party/lvgl
+          key: lvgl-v9.2.2-${{ runner.os }}
+
       - name: C 层构建（供仓颉侧链接）
-        run: bash scripts/build_native.sh
+        # ★ 必须带 --probes：
+        #   src/generated/conf_const.cj 是**生成物且不入库**，它由
+        #   scripts/gen_conf_const.py 从 probe_conf 的输出生成，而 probe_conf
+        #   只有在 --probes 时才会被构建。不带这个参数，
+        #   build_native.sh 会打印「未构建 probe_conf，跳过 conf_const.cj 生成」
+        #   然后继续 —— 接着 cjpm build 就会因为缺这个包文件而失败。
+        #   （脚本的这条提示是"跳过"而不是"失败"，属于本项目一直在清理的
+        #     "静默跳过"模式：这里必须由调用方显式要求，不能靠默认。）
+        run: bash scripts/build_native.sh --probes
 
       - name: 门禁（cjfmt / cjlint / build / test / ctest / ASan）
         run: bash scripts/gate.sh
