@@ -128,6 +128,25 @@ typedef struct {
 static void *wait_job_main(void *arg)
 {
     wait_job_t *j = (wait_job_t *)arg;
+
+    /*
+     * ★ 在**等待线程自己**上取一次等待图判据。
+     *
+     *   post_and_wait 在入队之前有一道闸门：risk != NULL 就直接返回
+     *   DEADLOCK_RISK，**根本不入队**。所以"任务没被接受"有两种完全相反的成因：
+     *     · 队列满 / 丢弃策略 → 查容量与策略
+     *     · 等待图判据非空   → 查线程身份登记（drainer 启停会不会留下陈旧身份）
+     *   而断言只报"不等于 QUEUE_FULL"，把两者混成了一个失败。
+     *
+     *   判据与线程身份绑定，必须在**同一个线程**上取，主线程取到的是另一个视角。
+     *   正常时静默（不污染输出），异常时才说话。
+     */
+    const char *risk = lvglcj_waitgraph_risk_reason();
+    if (risk != NULL) {
+        printf("        ★ [等待线程] 入队前等待图判据非空：%s\n", risk);
+        printf("           → post_and_wait 会直接返回 DEADLOCK_RISK，任务从未入队\n");
+    }
+
     j->rc = lvglcj_post_and_wait(j->task_id);
     return NULL;
 }
@@ -291,6 +310,22 @@ int main(void)
         CHECK(lvglcj_post_task(72) == LVGLCJ_OK, "投递 72");
         CHECK(lvglcj_post_task(73) == LVGLCJ_OK, "投递 73（触发 DROP_OLDEST）");
         pthread_join(th, NULL);
+        if (job.rc != LVGLCJ_ERR_QUEUE_FULL) {
+            /*
+             * ★ 把「实际拿到了什么」打出来。
+             *   只报"不等于 QUEUE_FULL"会把两类相反的成因混为一谈：
+             *     拿到了别的错误码 → post_and_wait 提前返回（如等待图判据）→ 任务没入队
+             *     一直等到超时      → 确实入了队但没人唤醒 → 才是等待/唤醒问题
+             *   下面同时给出计数，让"到底入没入队"变成可读事实。
+             */
+            printf("        实际 rc=%d（DEADLOCK_RISK=%d, NOT_INITIALIZED=%d, QUEUE_FULL=%d）\n",
+                   job.rc, LVGLCJ_ERR_DEADLOCK_RISK, LVGLCJ_ERR_NOT_INITIALIZED,
+                   LVGLCJ_ERR_QUEUE_FULL);
+            printf("        accepted=%lld executed=%lld dropped=%lld size=%d cap=%d\n",
+                   (long long)lvglcj_queue_stat(0), (long long)lvglcj_queue_stat(2),
+                   (long long)lvglcj_queue_stat(3), lvglcj_queue_size(),
+                   lvglcj_queue_capacity());
+        }
         CHECK(job.rc == LVGLCJ_ERR_QUEUE_FULL,
               "★ 被 DROP_OLDEST 挤掉的等待者被唤醒并收到 QUEUE_FULL");
     }
