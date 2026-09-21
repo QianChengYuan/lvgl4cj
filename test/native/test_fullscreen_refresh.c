@@ -24,6 +24,30 @@
 
 #include <stdio.h>
 #include <string.h>
+
+/*
+ * ★ 假 tick：由本用例显式推进 LVGL 的时钟，而不是靠真实 sleep 等时间流逝。
+ *
+ *   为什么必须这样 —— 这是本用例在 CI 上被 SIGKILL 的根因：
+ *   3000 轮 usleep(2000) 设计上就是 6 秒墙钟，而**共享 runner 上 usleep 会大幅超出**
+ *   （实测 3000 × ~60ms ≈ 190s），直接撞上门禁 180s 的上限被杀（退出码 137）。
+ *   **不是 arm64 慢，是它把耗时绑在了 sleep 精度上** —— 同一份代码在本地 x86 上
+ *   只要 12.35s，在 CI arm64 上 >180s，差别全在 ulseep 的实际睡眠时长。
+ *
+ *   假 tick 换来两件事：
+ *     1. 耗时与真实时间解耦 —— 3000 轮跑完只需渲染本身的成本，不再有等待；
+ *     2. **确定性** —— flush 次数不再随机器负载漂移，本地/CI、x86/arm64
+ *        得到同一个数字，断言（>40 次）才真正在断言而不是在赌。
+ *
+ *   LVGL 侧看到的时间推进与原来**完全等价**（每帧 2ms），
+ *   因此"必须驱动足够刷新量否则是假阴性"这条结论依然成立。
+ */
+static uint32_t g_fake_ms = 0;
+
+static uint32_t fake_tick_get(void)
+{
+    return g_fake_ms;
+}
 #include <unistd.h>
 
 static int g_fail = 0;
@@ -151,21 +175,25 @@ int main(void)
         lvglcj_obj_set_size(full, 1, 1); /* 先小，避免影响局部刷新段 */
 
         /*
-         * ★ 每轮必须 sleep 2ms（与 hello_cj 的实际帧节奏一致）。
+         * ★ 每帧必须推进 2ms（与 hello_cj 的实际帧节奏一致）。
          *
          *   紧循环 pump 时 lv_timer_handler 看到时间几乎没推进，刷新定时器
          *   （LV_DEF_REFR_PERIOD = 33ms）根本不到期 —— 实测 600 轮紧循环只产生
          *   **10 次 flush**，等于几乎没走到刷新路径上。
          *   而崩溃需要足够的刷新量才会出现，所以第一版复现「没崩」是假阴性：
          *   它压根没覆盖到出问题的代码。
-         *   加 2ms 节奏后，3 秒 ≈ 90 次全屏刷新，与仓颉侧崩溃时的量级一致。
+         *   推进 2ms/帧后，1500 帧 ≈ 90 次刷新，与仓颉侧崩溃时的量级一致。
+         *
+         * ★ 这里换成**假 tick**（原来是 usleep(2000)）：语义完全等价，
+         *   但不再把耗时绑在 sleep 精度上。详见文件头 g_fake_ms 的说明。
          */
+        lv_tick_set_cb(fake_tick_get);
         int32_t flush0 = lvglcj_sdl2_flush_count();
         for (int32_t i = 0; i < 1500; i++) {
             lvglcj_obj_set_pos(boxes[0], 10 + (i % 30), 0);
             (void)lvglcj_sdl2_poll_events();
             (void)lvglcj_pump();
-            usleep(2000);
+            g_fake_ms += 2;
         }
         int32_t flushPartial = lvglcj_sdl2_flush_count() - flush0;
         printf("        局部刷新段 flush 次数 = %d（紧循环时只有个位数）\n", flushPartial);
@@ -178,7 +206,7 @@ int main(void)
             lvglcj_obj_set_pos(full, (i % 2) ? 0 : 100, 0);
             (void)lvglcj_sdl2_poll_events();
             (void)lvglcj_pump();
-            usleep(2000);
+            g_fake_ms += 2;
         }
         int32_t flushFull = lvglcj_sdl2_flush_count() - flush1;
         printf("        全屏往复段 flush 次数 = %d\n", flushFull);

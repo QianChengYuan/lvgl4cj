@@ -212,8 +212,14 @@ jobs:
             set -e
             echo "  ${t} 用时 $(( SECONDS - start ))s（退出码 ${rc}）"
 
-            if [ "$rc" = "124" ]; then
-              echo "::error::${t} 超过 ${PER_TEST_TIMEOUT}s 未结束 —— 这是挂起，不是慢"
+            # ★ 124 与 137 都要认：`timeout -k 10` 的超时路径是
+            #   先 SIGTERM（→124），10 秒没死再 SIGKILL（→137）。
+            #   只判 124 会让「被 SIGKILL 杀掉」落进后面的分支，
+            #   于是给出「有断言失败」这个**错误诊断** ——
+            #   实测踩到：arm64 上 test_fullscreen_refresh 被 137 杀掉，
+            #   日志写的是「有断言失败」，据此去查断言会完全跑偏。
+            if [ "$rc" = "124" ] || [ "$rc" = "137" ]; then
+              echo "::error::${t} 超过 ${PER_TEST_TIMEOUT}s 被超时杀掉（退出码 ${rc}：124=SIGTERM，137=SIGKILL）—— 是挂起或过慢，**不是断言失败**"
               printf '%s\n' "$out" | tail -30
               fail=1
               continue
@@ -225,7 +231,21 @@ jobs:
               printf '%s\n' "$out" | grep -A15 'ERROR: ' | head -30
               fail=1
             fi
-            printf '%s' "$out" | grep -q '0 项失败' || { echo "::error::${t} 有断言失败"; fail=1; }
+            if ! printf '%s' "$out" | grep -q '0 项失败'; then
+              # ★ 区分「跑完了但断言失败」与「根本没产出汇总」。
+              #   后者说明进程在打印汇总前就没了（信号杀死、崩溃），
+              #   把它报成「断言失败」会把人引向错误的调查方向。
+              if printf '%s' "$out" | grep -q '项检查'; then
+                echo "::error::${t} 有断言失败"
+                # 直接把失败项列出来：否则要翻完整日志才知道是哪几条，
+                # 而"哪几条断言失败"正是这条报错本该回答的问题。
+                printf '%s\n' "$out" | grep -E '\[FAIL\]' | head -10
+              else
+                echo "::error::${t} 没有产出结果（退出码 ${rc}）—— 进程在汇总前就结束了，不是断言失败"
+                printf '%s\n' "$out" | tail -20
+              fi
+              fail=1
+            fi
           done
           exit $fail
 
