@@ -132,6 +132,37 @@ static void *wait_job_main(void *arg)
     return NULL;
 }
 
+/*
+ * ★ 等「等待者的任务确实已入队」，而不是「睡 30ms 赌它已入队」。
+ *
+ *   原写法是 usleep(30000) —— 拿睡眠当同步原语。这个假设在 macOS 上不成立：
+ *   实测 §5（DROP_OLDEST 挤掉等待者）与 §7（DISCARD 唤醒等待者）的断言失败，
+ *   而**顺序无关**的 §6（等待超时）通过 —— 失败的正是在"发号之前必须已经就位"
+ *   这件事上有隐含假设的那两段。
+ *
+ *   改成轮询队列自己维护的 accepted 计数（0 号 stat）：它增加即表示任务已 push 进队列。
+ *
+ *   ★ 为什么「已入队」就够，不需要等它进入 cond_wait：
+ *     waiter_complete() 在 waiter->mtx 下写 done=1 再 signal，
+ *     而等待方在同一个 waiter->mtx 下用 `while (!done)` 复查（见 native/src/queue.c）。
+ *     所以即便唤醒发生在等待方真正开始等待**之前**，它也会先看到 done 而立即返回 ——
+ *     不存在丢失唤醒。于是"入队可见"是充分条件，等待是确定性的。
+ *     （这也是为什么本测试不需要、也不应该去观测"是否正在等待"这种内部状态。）
+ *
+ *   轮询间隔 1ms、上限 2 秒：正常情况下一两轮即返回；
+ *   若条件始终不成立则**明确失败**，而不是让整个用例永久挂起。
+ */
+static int32_t wait_accepted_at_least(int64_t want)
+{
+    for (int32_t i = 0; i < 2000; i++) {
+        if (lvglcj_queue_stat(0) >= want) {
+            return 1;
+        }
+        usleep(1000);
+    }
+    return 0;
+}
+
 /* -------------------------------------------------------------------- main */
 int main(void)
 {
@@ -241,23 +272,31 @@ int main(void)
     /* ---------------------------------------------------- 5. DROP_OLDEST 唤醒被丢弃项 */
     printf("\n-- 5. DROP_OLDEST 唤醒被丢弃的等待者 --\n");
     drainer_stop(); /* 没有消费者，队列才会积压 */
-    lvglcj_queue_set_capacity(2);
+    /* ★ 这个返回值以前**没有检查**。容量若没真的变成 2，下面"投两个就满"的前提
+     *   就不成立，于是 dropped 不增、等待者收不到 QUEUE_FULL —— 表现成一串
+     *   看起来像产品缺陷的断言失败，实际是 setup 没生效。setup 的前提必须自己先立住。 */
+    CHECK(lvglcj_queue_set_capacity(2) == LVGLCJ_OK, "容量设为 2（本段前提）");
     CHECK(lvglcj_queue_set_full_policy(LVGLCJ_QUEUE_FULL_DROP_OLDEST) == LVGLCJ_OK,
           "策略设为 DROP_OLDEST");
 
+    /* ★ 在块**外**取基线：下面的 dropped 断言写在块外，drop0 必须同作用域 */
+    int64_t drop0 = lvglcj_queue_stat(3);
     {
         wait_job_t job = { .task_id = 71, .rc = 0 };
         pthread_t th;
         /* 71 先入队并等待；随后连投两个，使队列满并挤掉最旧的 71 */
+        int64_t acc0 = lvglcj_queue_stat(0);
         pthread_create(&th, NULL, wait_job_main, &job);
-        usleep(30000); /* 等它入队并进入等待 */
+        CHECK(wait_accepted_at_least(acc0 + 1), "★ 等待者的任务已入队（确定性等待，非 sleep）");
         CHECK(lvglcj_post_task(72) == LVGLCJ_OK, "投递 72");
         CHECK(lvglcj_post_task(73) == LVGLCJ_OK, "投递 73（触发 DROP_OLDEST）");
         pthread_join(th, NULL);
         CHECK(job.rc == LVGLCJ_ERR_QUEUE_FULL,
               "★ 被 DROP_OLDEST 挤掉的等待者被唤醒并收到 QUEUE_FULL");
     }
-    CHECK(lvglcj_queue_stat(3) >= 1, "dropped 计数增加");
+    /* ★ 断言改成**增量**：dropped 是跨段累计量，用绝对下界（>=1）时
+     *   前一段的残留会让它"因为错误的原因通过"。 */
+    CHECK(lvglcj_queue_stat(3) >= drop0 + 1, "dropped 计数增加（相对本段基线）");
 
     /* 清空残留（这些任务无人等待） */
     lvglcj_queue_set_full_policy(LVGLCJ_QUEUE_FULL_FAIL_FAST);
@@ -281,8 +320,10 @@ int main(void)
     {
         wait_job_t job = { .task_id = 91, .rc = 0 };
         pthread_t th;
+        int64_t acc0 = lvglcj_queue_stat(0);
         pthread_create(&th, NULL, wait_job_main, &job);
-        usleep(30000); /* 让它入队并进入等待 */
+        /* 同上：等"已入队"这个可观测事实，而不是睡 30ms 赌 */
+        CHECK(wait_accepted_at_least(acc0 + 1), "★ 等待者的任务已入队（确定性等待，非 sleep）");
         CHECK(lvglcj_queue_shutdown(LVGLCJ_SHUTDOWN_DISCARD) == LVGLCJ_OK,
               "DISCARD 关闭成功");
         pthread_join(th, NULL);
