@@ -1,0 +1,21 @@
+=== bench_cj perf：§11.2 性能指标 ===
+[env] 注意：本工具的数字**只在目标平台上有判定效力**；
+[env]       WSL2/CI 容器受宿主负载与虚拟化影响，仅供横向比较。
+[perf] ffi.raw.ns_per_call = 7089
+[perf] ffi.l1.ns_per_call = 10061
+[perf] ffi.l1_overhead.ns = 2972（L1 的线程归属检查成本）
+[perf] ffi.call_count = 100000
+[perf] event.latency.avg_ns = 16599
+[perf] event.latency.max_ns = 328000
+[perf] input.latency.ms = 20
+[perf] mem.peak_percent = 2（§11.3 门槛 <= 80）
+[perf] mem.free_percent = 97
+[perf] obj_count.headless = 6
+[perf] handle.alive = 4
+[perf] startup.init_to_first_frame_ms = 328
+[perf] startup.frames_until_first = 1
+[perf] fps.partial = 30（cpu=30% refr=0ms draw=5ms）
+[perf] fps.fullscreen = 14（cpu=99% refr=75ms draw=60ms）
+[perf] obj_count.sdl2 = 57
+[perf] perf.total_ms = 135183
+=== 采集完成 ===
