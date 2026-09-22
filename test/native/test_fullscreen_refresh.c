@@ -24,7 +24,20 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
+/*
+ * ★ 必须包在 LVGLCJ_TEST_HAVE_SDL2 里。
+ *
+ *   假 tick 只被 SDL2 那段主流程使用；而 SDL2 关闭时（如 aarch64 交叉编译，
+ *   本机没有 arm64 的 SDL2 开发包）那段会被 #ifdef 编译掉，
+ *   于是这个函数就成了"定义但未使用" —— 交叉编译会报
+ *   `warning: 'fake_tick_get' defined but not used`。
+ *   而"交叉编译零告警"是本项目的明确纪律，一条多余告警会让它变成空话
+ *   （第一次交叉编译这个文件时就撞到了）。
+ *   用与使用点**同一个宏**包住，是唯一不会再次失配的写法。
+ */
+#ifdef LVGLCJ_TEST_HAVE_SDL2
 /*
  * ★ 假 tick：由本用例显式推进 LVGL 的时钟，而不是靠真实 sleep 等时间流逝。
  *
@@ -32,7 +45,7 @@
  *   3000 轮 usleep(2000) 设计上就是 6 秒墙钟，而**共享 runner 上 usleep 会大幅超出**
  *   （实测 3000 × ~60ms ≈ 190s），直接撞上门禁 180s 的上限被杀（退出码 137）。
  *   **不是 arm64 慢，是它把耗时绑在了 sleep 精度上** —— 同一份代码在本地 x86 上
- *   只要 12.35s，在 CI arm64 上 >180s，差别全在 ulseep 的实际睡眠时长。
+ *   只要 12.35s，在 CI arm64 上 >180s，差别全在 usleep 的实际睡眠时长。
  *
  *   假 tick 换来两件事：
  *     1. 耗时与真实时间解耦 —— 3000 轮跑完只需渲染本身的成本，不再有等待；
@@ -48,7 +61,7 @@ static uint32_t fake_tick_get(void)
 {
     return g_fake_ms;
 }
-#include <unistd.h>
+#endif /* LVGLCJ_TEST_HAVE_SDL2 */
 
 static int g_fail = 0;
 static int g_total = 0;
