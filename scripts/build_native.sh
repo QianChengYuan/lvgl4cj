@@ -27,7 +27,23 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-BUILD_DIR="${LVGLCJ_BUILD_DIR:-$HOME/lvgl4cj-build}"
+# ★ 默认目录**故意与 gate.sh 不同**（gate 用 $HOME/lvgl4cj-build）。
+#
+#   原先两者共用同一个目录，而选项默认值相反：
+#       build_native.sh : -DLVGLCJ_BUILD_TESTS=OFF （还有一个 -DLVGLCJ_BUILD_PROBES=OFF）
+#       gate.sh         : -DLVGLCJ_BUILD_TESTS=ON
+#   CMake 是"最后配置者获胜"，于是**谁最后跑谁说了算**：
+#   提交前跑一次 build_native.sh 就会把该目录里的测试目标移除，
+#   下次 cmake --build 报成功却什么都不测，二进制还是旧的。
+#
+#   实测踩到两次，且两次都很容易被误判成"我改的测试没生效"——
+#   因为症状是"检查数没变"，而不是任何报错。
+#   本质问题是：**一次性配置的目录状态被两个不同用途的脚本反复翻转**，
+#   而翻转过程完全静默。分开目录是最小且彻底的修法。
+#
+#   注意产物不受影响：本脚本最终把库同步到 <工程根>/libs/，
+#   而仓颉侧读的是 libs/，不是这个构建目录。
+BUILD_DIR="${LVGLCJ_BUILD_DIR:-$HOME/lvgl4cj-build-native}"
 BUILD_TYPE="Debug"
 BUILD_PROBES=OFF
 BUILD_TESTS=OFF

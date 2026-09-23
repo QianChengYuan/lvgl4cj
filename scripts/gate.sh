@@ -161,7 +161,35 @@ else
        cmake --build "${BUILD_DIR}" -j "$(nproc)" >> "${TMPDIR_GATE}/cmake.log" 2>&1; then
         if ctest --test-dir "${BUILD_DIR}" --output-on-failure > "${TMPDIR_GATE}/ctest.log" 2>&1; then
             N="$(grep -cE '^ *[0-9]+/[0-9]+ Test' "${TMPDIR_GATE}/ctest.log" || true)"
-            ok "C 单测全绿（${N} 个可执行）"
+            # ★★ 只判"全绿"是不够的，还要判"测试集有没有被静默缩减"。
+            #
+            #   这条来自一次实际发生过的静默退化：本目录原先与 build_native.sh
+            #   共用，而那个脚本默认 -DLVGLCJ_BUILD_TESTS=OFF，于是"重建库"
+            #   会把这个目录里的测试目标移除。本脚本自己会再配置回来
+            #   （所以门禁一直是绿的），但**若在两者之间跑一次 ctest，
+            #   就会在测试集变小的情况下照样报"全绿"** ——
+            #   护栏静默变弱，比护栏报红危险得多。
+            #
+            #   ★ 探针必须用**构建目标列表**，不能用 ctest 的数量。
+            #     实测：把本目录配置成 -DLVGLCJ_BUILD_TESTS=OFF 之后，
+            #     `ctest -N` 仍然报 10 个测试，而 `--target test_style_widgets`
+            #     已经变成 "No rule to make target"。
+            #     也就是说 ctest 看到的清单在这件事上**不灵敏** ——
+            #     只拿它做护栏，等于装了一个不会响的警报器。
+            #     （首版就是这么写的，写完立刻用 tests=OFF 复现验证，才发现它不响。）
+            #
+            #   期望值 10 与下面 ASan 段逐个列举的清单一致。
+            #   匹配用**行首前缀** `... `（gmake 的目标列表格式），不要用行尾 ——
+            #   按行尾匹配时实测只数到 9（某一行的结尾形式不同），
+            #   于是护栏变成误报。护栏误报和护栏不响一样糟：
+            #   前者会让人开始忽略它。
+            TGT="$(cmake --build "${BUILD_DIR}" --target help 2>/dev/null | grep -cE '^\.\.\. test_' || true)"
+            if [[ "${N}" != "10" || "${TGT}" -lt "10" ]]; then
+                bad "C 单测数量异常：ctest 报 ${N} 个、构建目标 ${TGT} 个（期望 10）—— 测试集可能被静默缩减"
+                grep -E '^ *[0-9]+/[0-9]+ Test' "${TMPDIR_GATE}/ctest.log" | head -12
+            else
+                ok "C 单测全绿（${N} 个可执行）"
+            fi
         else
             bad "C 单测有失败"
             tail -25 "${TMPDIR_GATE}/ctest.log"
