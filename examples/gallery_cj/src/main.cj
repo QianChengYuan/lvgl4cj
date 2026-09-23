@@ -144,6 +144,29 @@ main(args: Array<String>) {
 
     var y: Int32 = 8
 
+    /* ================= 颜色条：**先看这个** =================
+     * 它是本次诊断的关键判据，因为「全黑」有两种完全不同的成因，靠肉眼分不出：
+     *   · 6 个方块一个都不显示   → 像素根本没到窗口（呈现/纹理/窗口问题）
+     *   · 显示但颜色明显不对     → 像素格式或 stride 不对（花屏类的错）
+     *   · 显示且颜色正确         → 渲染链路正常，之前的"黑"只是**深色主题缺字**造成的观感
+     * 深色底 + 缺字确实很像"全黑"，所以需要一个不可能看错的东西放在最上面。 */
+    let c0 = makeCard(root, y, 56, "colour bar (0)", cjk)
+    let cols = Array<UInt32>(6, repeat: 0)
+    cols[0] = 0xFF3B30
+    cols[1] = 0x34C759
+    cols[2] = 0x007AFF
+    cols[3] = 0xFFCC00
+    cols[4] = 0xFF2D55
+    cols[5] = 0xFFFFFF
+    var bx: Int32 = PAD
+    for (i in 0..6) {
+        let b = LvObject.create(c0)
+        b.setPos(bx, 26).setSize(60, 22)
+        LvStyle.create().bgColor(cols[i]).bgOpa(255).padAll(0).applyTo(b)
+        bx += 66
+    }
+    y += 64
+
     /* ================= 0) 统计：全 ASCII，保证在任何字体下都看得见 ================= */
     let statCard = makeCard(root, y, 96, "0) stats / 运行统计", cjk)
     let stat = LvLabel.create(statCard)
@@ -419,9 +442,20 @@ main(args: Array<String>) {
             tick[0] = idx + 1
             rt.post {
                 let p = LvDebug.perfSample()
-                /* 统计行**全 ASCII**：它是判断"有没有在动"的唯一依据，不能依赖中文能否显示 */
+                /*
+                 * 统计行**全 ASCII**：它是判断"有没有在动"的唯一依据，不能依赖中文能否显示。
+                 *
+                 * ★ flush / present / waitTimeout 三个计数是**定位黑屏的关键**：
+                 *   · flush 不增长      → LVGL 根本没刷（display/驱动层的问题）
+                 *   · flush 涨但 present 不涨 → 渲染请求投出去了，主线程没服务（事件没被消费）
+                 *   · waitTimeout 接近 flush → 就是上面那种「投递了但没人做」，每帧白等 100ms
+                 *   · 三个都正常涨      → 渲染链路是通的，黑屏要把问题往像素格式/纹理上找
+                 *   这三个数是原子读，任意线程调用都安全，所以放在这里不打紧。
+                 */
                 let s = "fps ${p.fps}  cpu ${p.cpuPercent}%  refresh ${p.refrTimeMs} ms  draw ${p.drawTimeMs} ms\n" +
-                    "objects ${p.objCount}  anims ${animCountRunning()}  animCtx ${animCtxCount()}  taskQ ${taskQueueSize()}"
+                    "flush ${backend.flushCount()}  present ${backend.presentCount()}  " +
+                    "waitTimeout ${backend.waitTimeoutCount()}  objects ${p.objCount}  " +
+                    "anims ${animCountRunning()}  taskQ ${taskQueueSize()}"
                 perfLine[0] = s
                 stat.setText(s)
 
@@ -442,6 +476,26 @@ main(args: Array<String>) {
 
     /* 退出时把最后一份采样打出来 —— 这样「看着不对」可以带回一串数字来对照 */
     println("[gallery_cj] last sample: ${perfLine[0]}")
+
+    /*
+     * ★ 三个计数必须在 backend.close() **之前**读。
+     *   lvglcj_sdl2_deinit 里会把它们清零（它们是「每次会话」的统计量），
+     *   读晚了只会得到 0 —— 上一版就把它当成了"一帧都没呈现"，是个误导性很强的假象。
+     */
+    println(
+        "[gallery_cj] counters before close: flush ${backend.flushCount()}  " +
+            "present ${backend.presentCount()}  waitTimeout ${backend.waitTimeoutCount()}  " +
+            "paused ${backend.isPaused()}")
+
+    /*
+     * ★ 先解注册输入回调，再停主循环。
+     *   那个回调是**跨语言调用**（SDL 事件循环所在的 C 线程进仓颉），
+     *   若在运行时开始收尾之后仍可能被触发，退出阶段就有踩空的风险。
+     *   实测：真实 SDL 窗口下退出会 SIGSEGV（栈顶是 CJ_ScheduleStop），dummy 驱动下不复现 ——
+     *   与「收尾期仍有跨语言回调」这一形状吻合。这一句是针对它的缓解措施（不是定论），
+     *   正好用来验证猜想：若加上之后退出不再崩，形状就确认了。
+     */
+    rt.post {indev.close()}
 
     /* 退出顺序与 hello_cj 一致：先停主循环（交回 LVGL 线程身份），再关后端，最后反初始化 */
     rt.stop(shutdownMode: ShutdownMode.Discard)
