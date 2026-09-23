@@ -129,6 +129,25 @@ public open class LvObject {
         return this
     }
 
+    /**
+     * 把高度改为**按内容自适应**（宽度不变）。
+     *
+     * 适用场合：**不滚动**的容器 —— 让卡片/面板跟着内容长高，不必手算总高度。
+     *
+     * ★★ **不要用在滚动容器上**（实测踩过）：滚动容器能移动的距离 = 内容高度 − 容器高度，
+     *   容器一旦被撑到等于内容，这个差就是 0，于是**完全滚不动**。
+     *   滚动容器应当是**视口**尺寸（如屏幕大小），超出的内容由滚动带进视野 ——
+     *   "内容在容器之外"不等于"看不见"，那正是滚动的意义。
+     *
+     * 调用后由 LVGL 在下一次布局时重算高度，**因此新增/删除子对象后不必重设**。
+     *
+     * @throws[LvglException] 句柄失效
+     */
+    public func setHeightToContent(): LvObject {
+        throwIfError(unsafe { lvglcj_obj_set_height_to_content(handle) }, "setHeightToContent")
+        return this
+    }
+
     public func align(a: LvAlign, xOfs!: Int32 = 0, yOfs!: Int32 = 0): LvObject {
         throwIfError(unsafe { lvglcj_obj_align(handle, lvAlignToInt(a), xOfs, yOfs) }, "align")
         return this

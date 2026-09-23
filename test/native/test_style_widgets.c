@@ -968,6 +968,35 @@ int main(void)
         CHECK(lvglcj_obj_delete(box) == LVGLCJ_OK, "删除容器");
     }
 
+    /* ================================================== 7m. 高度按内容自适应
+     *
+     * 对应于"部分卡片没显示或显示不全"：容器高度写死后，超出的子对象被父容器裁剪，
+     * 且滚到底也看不到。这类现象看起来像渲染故障，其实是尺寸算错 —— 手算总高度
+     * 正是源头，所以把"让 LVGL 自己算"做成一个入口，并在示例里改用它。
+     */
+    printf("\n-- 7m. 高度按内容自适应 --\n");
+    {
+        int64_t box = lvglcj_obj_create(scr);
+        CHECK(lvglcj_obj_set_size(box, 200, 60) == LVGLCJ_OK, "容器 200x60（故意比内容矮）");
+        int64_t inner = lvglcj_obj_create(box);
+        CHECK(lvglcj_obj_set_pos(inner, 0, 0) == LVGLCJ_OK, "子对象放在 (0,0)");
+        CHECK(lvglcj_obj_set_size(inner, 200, 400) == LVGLCJ_OK, "子对象 200x400（超出容器）");
+        lv_obj_update_layout((lv_obj_t *)lvglcj_ptr_of(box));
+        CHECK(lv_obj_get_height((lv_obj_t *)lvglcj_ptr_of(box)) == 60,
+              "（前置）此时容器仍是 60，子对象被裁剪");
+
+        CHECK(lvglcj_obj_set_height_to_content(box) == LVGLCJ_OK, "高度改为按内容自适应");
+        lv_obj_update_layout((lv_obj_t *)lvglcj_ptr_of(box));
+        printf("        （容器高度: 60 → %d，子对象高 400）\n",
+               (int)lv_obj_get_height((lv_obj_t *)lvglcj_ptr_of(box)));
+        CHECK(lv_obj_get_height((lv_obj_t *)lvglcj_ptr_of(box)) >= 400,
+              "★★ 容器高度被撑到 >= 400（子对象不再被裁剪）");
+        CHECK(lv_obj_get_width((lv_obj_t *)lvglcj_ptr_of(box)) == 200,
+              "★ 只改高度，宽度不变（200）");
+
+        CHECK(lvglcj_obj_delete(box) == LVGLCJ_OK, "删除容器");
+    }
+
     /* ================================================== 8. 清理顺序 */
     printf("\n-- 8. 清理 --\n");
     /*

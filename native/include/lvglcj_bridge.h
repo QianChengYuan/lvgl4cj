@@ -263,6 +263,15 @@ int32_t lvglcj_obj_set_size(int64_t obj, int32_t w, int32_t h);
  *   所以"滚轮滚动"只能由我们显式调用滚动接口实现：后端收 SDL_MOUSEWHEEL，
  *   示例在读回调里消费并调用本入口。（这也是本项目第一次暴露 scroll 能力。） */
 int32_t lvglcj_obj_scroll_by(int64_t obj, int32_t dx, int32_t dy);
+
+/* 把高度设为「按内容自适应」（底层 LV_SIZE_CONTENT）。
+ *
+ * ★ 为什么需要它：容器高度写死后，**超出高度的子对象会被裁剪**，而且滚到底也看不到
+ *   —— 实测于全控件示例：容器写死 1420，而卡片累加到 1646，于是「9) LvChart」被切掉
+ *   一截、「10) LvTable/LvImage」整个不可见。这类 bug 的根源就是"手算总高度"，
+ *   而它能被 LVGL 自己算（就是本入口）。
+ * 宽度不受影响；调用后由 LVGL 在下一次布局时重算高度，因此**新增/删除子对象后不必重设**。 */
+int32_t lvglcj_obj_set_height_to_content(int64_t obj);
 int32_t lvglcj_obj_set_parent(int64_t obj, int64_t parent);
 int32_t lvglcj_obj_align(int64_t obj, int32_t align, int32_t x_ofs, int32_t y_ofs);
 int32_t lvglcj_obj_add_flag(int64_t obj, int32_t flag);

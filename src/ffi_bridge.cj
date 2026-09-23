@@ -286,6 +286,10 @@ foreign func lvglcj_obj_get_child_count(obj: Int64): Int32
 /* 相对滚动（像素）。滚轮之所以经由它实现：LVGL 的滚轮（encoder）在导航模式下
  * 只**移动焦点**，指针通路只认拖动；所以"滚轮滚动"必须显式调用滚动接口。 */
 foreign func lvglcj_obj_scroll_by(obj: Int64, dx: Int32, dy: Int32): Int32
+/* 高度改为「按内容自适应」（底层 LV_SIZE_CONTENT）。
+ * 容器高度写死会让超出的子对象被裁剪且滚不到 —— 实测过：示例写死 1420，卡片累加到 1646，
+ * 于是最后两张卡片一张被切、一张完全不可见。 */
+foreign func lvglcj_obj_set_height_to_content(obj: Int64): Int32
 
 foreign func lvglcj_obj_add_event(obj: Int64, code: Int32, cid: Int32): Int64
 

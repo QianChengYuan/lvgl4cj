@@ -179,6 +179,26 @@ int32_t lvglcj_obj_scroll_by(int64_t obj, int32_t dx, int32_t dy)
     return LVGLCJ_OK;
 }
 
+/*
+ * 高度按内容自适应。
+ *
+ * ★ 它解决的是一类**看起来像渲染问题、其实是尺寸问题**的现象：容器高度写死后，
+ *   超出部分的子对象被父容器裁剪，滚到底也看不到（实测于全控件示例：
+ *   容器写死 1420、卡片累加到 1646 → 第 9 张被切、第 10 张全不可见）。
+ *   手算总高度是这类 bug 的源头，交给 LVGL 自己算才是稳的。
+ *
+ * 注：只改高度，不动宽度 —— 宽度通常有明确的期望值（如屏幕宽），
+ *   而高度才是"随内容长"的那一维。
+ */
+int32_t lvglcj_obj_set_height_to_content(int64_t obj)
+{
+    LVGLCJ_HANDLE_GUARD(obj, __func__);
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    lv_obj_set_height((lv_obj_t *)lvglcj_ptr_of(obj), LV_SIZE_CONTENT);
+    return LVGLCJ_OK;
+}
+
 int32_t lvglcj_obj_set_parent(int64_t obj, int64_t parent)
 {
     LVGLCJ_HANDLE_GUARD(obj, __func__);
