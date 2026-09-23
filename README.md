@@ -79,10 +79,10 @@ main() {
 | --- | --- |
 | L1 模块（`src/*.cj`，不含测试） | **19** |
 | C 侧实现（`native/src/*.c`） | **22** |
-| ABI 声明函数 | **206**（已实现 **198**，未实现 8，**全部是 Canvas**） |
-| 仓颉侧 `foreign` 声明 | **215** |
+| ABI 声明函数 | **217**（已实现 **209**，未实现 8，**全部是 Canvas**） |
+| 仓颉侧 `foreign` 声明 | **226** |
 | C 用例 | **10 个可执行 / 381 项检查** |
-| 仓颉测试 | **64 用例（63 通过 / 1 跳过 / 0 失败）** |
+| 仓颉测试 | **72 用例（71 通过 / 1 跳过 / 0 失败）** |
 
 已具备的能力（摘要）：
 
@@ -93,6 +93,8 @@ main() {
   父对象删除时子句柄**级联失效**（不是静默变野指针）
 - **UI**：Display（headless / SDL2）、InDev（指针/按键/编码器）、
   对象与样式（27 个 setter）、21 种事件码、字体、动画、POSIX 文件系统
+- **控件**：`LvObject`（基类）、`LvLabel`、`LvButton`，以及 P1 批次 1 的
+  `LvSwitch` / `LvCheckbox` / `LvBar`。**共 6 个**，P1 清单其余 12 个见「已知边界」
 - **可观测性**：`LvDebug`（`objCount` / `memMonitor` / `perfSample` / `dumpTree`）、`LvBench`（性能测量）
 
 ---
@@ -143,8 +145,14 @@ main() {
 这一节比上面任何数字都重要。**未列出的能力不代表可用；列出的缺口都是已知的。**
 
 1. **Canvas 完全没有实现**（8 个 ABI 符号）。需要绘图必须走原生 API。这是 P1 首项。
-2. **控件只有 3 个**：`LvObject`（基类）、`LvLabel`、`LvButton`。
-   没有 switch / checkbox / slider / dropdown / table / chart —— 需用原生 API 补齐。
+2. **控件只有 6 个**：`LvObject`（基类）、`LvLabel`、`LvButton`、
+   `LvSwitch`、`LvCheckbox`、`LvBar`。
+   设计文档 §7.1 的 P1 清单还剩 **12 个**未做：
+   常用交互 `slider` `arc` `led` `line` `spinner` `dropdown` `image`，
+   复合控件 `chart` `table` `roller` `textarea` `keyboard`。
+   它们之所以被放在后续批次，不是因为难，而是各自引入**新的值类型**
+   （图像描述符、点数组、字符串列表），各带一套所有权问题 —— 需要逐个单独设计。
+   在此之前需用原生 API 补齐。
 3. **内置 CJK 字库不是"中文可用"的开关。** 官方描述为
    `1000 most common CJK radicals`，但实测（`native/probe/probe_font_coverage.c`）
    是一份**手工拼合的混合清单**：约 1118 个 CJK 字 + 173 个日文假名，
