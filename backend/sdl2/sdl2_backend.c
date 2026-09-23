@@ -96,18 +96,53 @@ static _Atomic int64_t g_render_thread_tid = 0;
  */
 static pthread_mutex_t g_done_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t  g_done_cond = PTHREAD_COND_INITIALIZER;
-static int             g_done_flag = 0;
 
-/* 复位额度（init/deinit 用）。静态初始化的 mutex/condvar 本身无需销毁。 */
+static _Atomic uint32_t g_applied_seq = 0;
+
+/*
+ * 已被**消费**（上传进纹理）的最大序号。0 = 还没有任何一条被消费。
+ *
+ * ★★ 为什么是序号而不是"有一次唤醒"的标志（这是实测逼出来的改法）：
+ *
+ *   生产者（LVGL 线程）把一条渲染条带拷进**唯一一块**暂存区，然后必须等到
+ *   「这块暂存区已经被消费」才能返回 —— 否则 LVGL 会接着渲染下一条带并
+ *   **覆盖**它，那条带的像素就再也没人消费了。
+ *
+ *   所以等待的谓词只能是"**我自己那个序号已被消费**"。用单标志（合并语义）
+ *   有一个致命性质：任何一次**替别人**的唤醒都会让后来的等待被立刻满足，
+ *   于是生产者在"数据其实还没被消费"的状态下返回、随即覆盖暂存区。
+ *   而唤醒来源不止"渲染完成"——sdl2_mark_paused()（窗口最小化/关闭）
+ *   也会唤醒；它在**无人等待**时执行，就会把额度留在标志里。
+ *
+ *   实测证据（Raspberry Pi Zero 2 W + KMSDRM，1920×1080）：
+ *     · 画面上出现**纯黑带**，高度恰是渲染条带高度（108 行）的**整数倍**，
+ *       位置每次随机（三次跑：40% / 50% / 50%）；
+ *     · 同一轮 waitTimeout 4~8、staleApply 12~13（两者一起出现是特征）；
+ *     · 换成 dummy 驱动（Present 几乎免费）后两者都是 0，黑带消失。
+ *   根因是放行原本发生在 **Present 之后**：KMSDRM 的 Present 是 GL + KMS
+ *   page flip，在 Zero 2W 上会超过 100ms 的等待上限 —— flush 超时返回、
+ *   LVGL 继续跑、下一条带覆盖暂存区，而队列里那个事件的像素再没人消费。
+ *
+ *   两处一起改才成立：
+ *     1. 谓词换成序号（本变量 + sdl2_wait_done 的重判）——
+ *        "被别人唤醒"不再可能满足我，因为我的序号还没到；
+ *     2. 放行点跟到**上传之后、Present 之前** —— "等待返回"的含义是
+ *        "暂存区可以复用了"，与 Present 无关：Present 慢不该拖累生产者。
+ *   于是 sdl2_reset_done 那种"清残留额度"的补丁不再需要（见它在 flush 里
+ *   的移除），因为已经不存在的"残留额度"本就无法满足任何具体序号。
+ */
+
+/* 复位（init/deinit 用）。静态初始化的 mutex/condvar 本身无需销毁。 */
 static void sdl2_reset_done(void)
 {
     pthread_mutex_lock(&g_done_lock);
-    g_done_flag = 0;
+    atomic_store(&g_applied_seq, 0);
     pthread_mutex_unlock(&g_done_lock);
 }
 
 /*
- * 唤醒正在等待的渲染方。
+ * 唤醒等待方。**它只是唤醒**：能不能结束等待，由 sdl2_wait_done 用序号重新判断 ——
+ * 所以"替别人做的这次唤醒"不会误放行任何等待方（这正是旧标志写法的病根）。
  *
  * ★ 窗口关闭/最小化路径上的这一句是**必需**的（§8.1.2 强制要求 3）：
  *   没有它，正在 flush 里等待的 LVGL 线程会一直等到超时。
@@ -115,8 +150,19 @@ static void sdl2_reset_done(void)
 static void sdl2_signal_done(void)
 {
     pthread_mutex_lock(&g_done_lock);
-    g_done_flag = 1;
-    pthread_cond_signal(&g_done_cond);
+    pthread_cond_broadcast(&g_done_cond);
+    pthread_mutex_unlock(&g_done_lock);
+}
+
+/*
+ * 在**渲染线程**上调用：声明"某个序号的数据已经被消费"，并唤醒等待方。
+ * 这是放行的唯一入口 —— 它只该在 sdl2_apply_texture_update 之后调用。
+ */
+static void sdl2_mark_applied(uint32_t seq)
+{
+    pthread_mutex_lock(&g_done_lock);
+    atomic_store(&g_applied_seq, seq);
+    pthread_cond_broadcast(&g_done_cond);
     pthread_mutex_unlock(&g_done_lock);
 }
 
@@ -124,6 +170,16 @@ static _Atomic int g_paused = 0;          /* 窗口关闭或最小化 */
 static _Atomic int g_quit_requested = 0;  /* 请求退出主循环 */
 static _Atomic int g_pending = 0;         /* 有渲染请求在途 */
 static _Atomic int g_render_suppressed = 0; /* 测试注入：忽略渲染请求 */
+
+/*
+ * 测试注入：让 Present 人为变慢（毫秒）。
+ *
+ * ★ 它存在的理由很具体：KMSDRM 上"纯黑带"的成因是 **Present 慢于等待上限**，
+ *   而 Present 快慢取决于驱动/硬件（dummy 上几乎免费，GL + page flip 上可能
+ *   超过 100ms）。没有这个注入就没法在 CI 里复现那条路径 —— 也就没法证明
+ *   "放行只等上传、不等 Present"这个修改真的解决了它（见 tests 里的用例）。
+ */
+static _Atomic int32_t g_present_delay_ms = 0;
 
 static _Atomic int g_paused_drop = 0;     /* 诊断用：暂停路径丢掉的帧数 */
 static _Atomic int32_t g_flush_count = 0;
@@ -153,8 +209,11 @@ static _Atomic uint32_t g_in_key_taken = 0;
 
 /* ------------------------------------------------------------ 工具 */
 
-/* 有界等待渲染完成。返回 0 = 被唤醒，-1 = 超时 */
-static int sdl2_wait_done(int timeout_ms)
+/*
+ * 有界等待：等到**指定序号**被消费为止。
+ * 返回 0 = 该序号已消费（暂存区可以复用），-1 = 超时或窗口已暂停。
+ */
+static int sdl2_wait_done(uint32_t seq, int timeout_ms)
 {
     struct timespec deadline;
     clock_gettime(CLOCK_REALTIME, &deadline);
@@ -168,17 +227,23 @@ static int sdl2_wait_done(int timeout_ms)
     int rc = -1;
     pthread_mutex_lock(&g_done_lock);
     /*
-     * 用 while 而不是 if：condvar 允许**虚假唤醒**，
-     * 被唤醒后必须重新检查条件。写成 if 会在虚假唤醒时误判为"渲染完成"，
-     * 于是 flush 提前返回、画面撕裂 —— 而且只在特定平台上偶发，极难复现。
+     * 用 while 而不是 if，两个理由：
+     *   · condvar 允许**虚假唤醒**；
+     *   · 唤醒**可能是替别人做的**（暂停路径、或另一个序号被消费）。
+     * 所以条件必须是"我自己那个序号到了没有"。若写成 if、或去检查一个
+     * 合并语义的标志，就会在别人的唤醒下误判为"已消费" —— flush 提前返回
+     * 并覆盖还没被消费的暂存数据，那条带的像素从此丢失。
+     * 这正是 KMSDRM 上"纯黑带"的成因（见 g_applied_seq 上方的实测说明）。
      */
-    while (g_done_flag == 0) {
+    while (atomic_load(&g_applied_seq) < seq) {
         if (pthread_cond_timedwait(&g_done_cond, &g_done_lock, &deadline) != 0) {
             break; /* 超时或出错：与旧实现 sem_timedwait 非 0 时同样返回 -1 */
         }
+        if (atomic_load(&g_paused)) {
+            break; /* 窗口已关闭/最小化：立即返回（§8.1.2 强制要求 3） */
+        }
     }
-    if (g_done_flag != 0) {
-        g_done_flag = 0; /* 消费这一次额度 */
+    if (atomic_load(&g_applied_seq) >= seq) {
         rc = 0;
     }
     pthread_mutex_unlock(&g_done_lock);
@@ -262,78 +327,127 @@ static void sdl2_mark_paused(int quit)
  *   安全性来自既有的等待协议 —— flush 随后会阻塞等渲染完成信号，
  *   这段时间里 LVGL 不会复用那块像素缓冲（要等 flush_ready 才复用）。
  */
-static lv_area_t   g_upd_rect;
-static uint8_t    *g_upd_stage = NULL;
-static int32_t     g_upd_stage_cap = 0;
-static int32_t     g_upd_pitch = 0;
-static _Atomic int g_upd_valid = 0;
-
 /*
- * ★★ 暂存数据的**序号**，以及它与渲染事件里那个序号的比对。
+ * ===================== 暂存区：**多槽轮转**，而不是一块共享缓冲 =====================
  *
- *   为什么需要：暂存区是共享的（只有一块）。若某次 flush 的等待提前返回
- *   （成因见 sdl2_flush_sink 里 sdl2_reset_done 的说明），LVGL 会以为本帧已显示、
- *   继续跑下一帧，而下一次 flush 会**覆盖**这块暂存区 —— 此时留在队列里的旧事件
- *   若还按"旧事件的矩形"去贴，就会把新像素画到旧位置上。
+ * ★★ 这是"kmsdrm 上出现纯黑带"的真正解法，来龙去脉写清楚：
  *
- *   现在：事件带上投递时的序号；渲染侧只按**暂存区自带的矩形**应用（天然自洽），
- *   序号不一致只记一笔 —— 它意味着协议漏过一次，而不意味着画面会画错。
- *   这个计数是给使用者看的（示例的统计行里就是 staleApply 那一项）：
- *   它长期为 0 才说明"等待额度的配对"真的从未漏过。
+ *   生产者（LVGL 线程）每写一条带，都要把它拷进一块**后端自己的**缓冲，再让渲染
+ *   线程贴上纹理。若等待超时返回（KMSDRM 上 Present 是 GL + KMS page flip，
+ *   Zero 2W 上可能超过 100ms 的等待上限），LVGL 会立刻渲染**下一条带**；
+ *   而只有一块暂存区时它就把上一块**覆盖**掉了 —— 队列里那个事件的像素再没人消费，
+ *   画面上那条带永远没被写过：**纯黑**（旧纹理上则是残留旧内容 = 重影）。
+ *
+ *   实测（1920×1080 连跑三次）：黑带高度恰是渲染条带高度的整数倍、位置每次随机；
+ *   同一轮 waitTimeout 4~15、staleApply 10~14；换 dummy（Present 免费）两者全为 0、
+ *   黑带消失。也就是说：**超时 ≠ 丢数据**这个等式必须被打断。
+ *
+ *   修法就是给若干槽轮转：生产者取下一个空槽。只要当时还有槽可用，超时就只意味着
+ *   "消费者晚了"，而不意味着数据没了。槽数取 3 —— 单缓冲的 LVGL 同时最多只有一个
+ *   flush 在途，再加"超时后队列里可能还留着一个"，3 个槽留有余量。
+ *
+ *   两个计数必须分开看，它们的含义完全不同：
+ *     · staleApply —— 事件序号 ≠ 最新 staged 序号。只说明"生产者跑在消费者前面"，
+ *                     在慢消费者上出现是**正常**的，不表示会画错（事件自带槽号与矩形）。
+ *     · slotClobber —— 取到的槽**还没被应用**就又被写。这才是**真正丢数据**，
+ *                     长期必须为 0。修复前只有一块暂存区，所以它等于每轮都发生。
  */
-static _Atomic uint32_t g_upd_seq = 0;     /* 当前暂存数据的序号 */
-static _Atomic uint32_t g_stage_gen = 0;   /* 每次 stage 递增，作为序号来源 */
-static _Atomic int32_t  g_stale_apply = 0; /* 事件序号与暂存序号不一致的次数 */
+#define SDL2_STAGE_SLOTS 3
+
+typedef struct {
+    uint8_t   *buf;   /* 本槽的像素拷贝（按区域宽度紧凑排列，见 display.c 的行距说明） */
+    int32_t    cap;
+    int32_t    pitch;
+    lv_area_t  rect;
+    _Atomic int valid; /* 1 = 有数据待应用；应用之后清零 */
+} sdl2_stage_slot_t;
+
+static sdl2_stage_slot_t g_slots[SDL2_STAGE_SLOTS];
+static _Atomic int      g_slot_next = 0;    /* 生产者轮转取槽 */
+static _Atomic int32_t  g_slot_clobber = 0; /* 真正丢数据的次数（长期必须为 0） */
+
+static _Atomic uint32_t g_upd_seq = 0;      /* 最近一次 stage 的序号 */
+static _Atomic uint32_t g_stage_gen = 0;    /* 每次 stage 递增，作为序号来源 */
+static _Atomic int32_t  g_stale_apply = 0;  /* 事件序号与最新序号不一致的次数 */
 
 /*
- * ★ 暂存区是**后端自己的**，拷的是像素内容，不是 LVGL 缓冲的地址。
+ * ★ 暂存的是像素**内容**，不是 LVGL 缓冲的地址。
  *
  *   第一版保存的是 `px_map` 指针，并依赖"flush 随后会阻塞等渲染完成"来保证
  *   指针有效 —— ASan 立刻抓到 SEGV in sdl2_apply_texture_update：那个假设在
  *   超时路径上不成立（flush 超时返回后 LVGL 会复用缓冲，而渲染事件仍在队列里，
  *   主线程稍后再读就是悬空访问）。教训是：**跨线程传递要传值，不要传指向别人的指针**。
  *
- *   代价是每帧一次 memcpy：PARTIAL 下通常只有几 KB，首帧整屏 384KB 也在毫秒量级。
+ *   代价是每条带一次 memcpy：PARTIAL 下通常只有几 KB，首帧整屏 384KB 也在毫秒量级。
+ *
+ * 返回取到的槽号（供事件携带）；参数不合法时返回 -1（表示这条带没有人消费，
+ * 调用方直接放行即可）。
  */
-static void sdl2_stage_texture_update(int64_t disp, const lv_area_t *area, uint8_t *px_map,
-                                      uint32_t stride)
+static int sdl2_stage_texture_update(int64_t disp, const lv_area_t *area, uint8_t *px_map,
+                                     uint32_t stride)
 {
-    if (area == NULL || px_map == NULL) {
-        atomic_store(&g_upd_valid, 0);
-        return;
+    if (area == NULL || px_map == NULL || stride == 0) {
+        return -1;
     }
     int32_t h = area->y2 - area->y1 + 1;
-    if (h <= 0 || stride == 0) {
-        atomic_store(&g_upd_valid, 0);
-        return;
+    if (h <= 0) {
+        return -1;
+    }
+    size_t need = (size_t)stride * (size_t)h;
+
+    uint32_t seq = atomic_fetch_add(&g_stage_gen, 1) + 1;
+    atomic_store(&g_upd_seq, seq);
+
+    int idx = (int)((uint32_t)atomic_fetch_add(&g_slot_next, 1) % SDL2_STAGE_SLOTS);
+    sdl2_stage_slot_t *s = &g_slots[idx];
+
+    if (atomic_load(&s->valid)) {
+        /*
+         * 取到的槽**还没被应用**就又要被写 —— 这才是真正的丢数据。
+         * 修复前只有一块暂存区，所以这条分支等于每轮都走：
+         * 表现就是画面上出现条带高度整数倍的纯黑带。
+         */
+        atomic_fetch_add(&g_slot_clobber, 1);
     }
 
-    size_t need = (size_t)stride * (size_t)h;
-    if ((int32_t)need > g_upd_stage_cap) {
-        uint8_t *n = (uint8_t *)realloc(g_upd_stage, need);
+    if ((int32_t)need > s->cap) {
+        uint8_t *n = (uint8_t *)realloc(s->buf, need);
         if (n == NULL) {
             lvglcj_record_error(LVGLCJ_ERR_BACKEND_FAILURE, disp, 0, __func__,
-                                "渲染暂存区扩容失败（内存不足）");
-            atomic_store(&g_upd_valid, 0);
-            return;
+                                "渲染暂存槽扩容失败（内存不足）");
+            atomic_store(&s->valid, 0);
+            return -1;
         }
-        g_upd_stage = n;
-        g_upd_stage_cap = (int32_t)need;
+        s->buf = n;
+        s->cap = (int32_t)need;
     }
 
-    memcpy(g_upd_stage, px_map, need);
-    g_upd_rect = *area;
-    g_upd_pitch = (int32_t)stride;
-    atomic_store(&g_upd_valid, 1);
+    memcpy(s->buf, px_map, need);
+    s->rect = *area;
+    s->pitch = (int32_t)stride;
+    atomic_store(&s->valid, 1);
+    return idx;
 }
 
-/* 在**渲染线程**上调用：把暂存区里的区域上传进纹理 */
-static void sdl2_apply_texture_update(int64_t disp)
+/* 把**所有**槽标记为无效（暂停/反初始化用：这些数据不会再有人应用） */
+static void sdl2_invalidate_all_slots(void)
 {
-    if (!atomic_load(&g_upd_valid)) {
-        return;
+    for (int i = 0; i < SDL2_STAGE_SLOTS; ++i) {
+        atomic_store(&g_slots[i].valid, 0);
     }
-    if (g_upd_stage == NULL || g_texture == NULL) {
+}
+
+/* 在**渲染线程**上调用：把指定槽的数据上传进纹理。返回 1 = 真的上传了 */
+static int sdl2_apply_texture_update(int64_t disp, int idx)
+{
+    if (idx < 0 || idx >= SDL2_STAGE_SLOTS) {
+        return 0;
+    }
+    sdl2_stage_slot_t *s = &g_slots[idx];
+    if (!atomic_load(&s->valid)) {
+        return 0;
+    }
+    if (s->buf == NULL || g_texture == NULL) {
         /*
          * ★ 贴不上去时**不能**把"待上传"清掉。
          *
@@ -342,24 +456,24 @@ static void sdl2_apply_texture_update(int64_t disp)
          *   现在保留标记，等纹理就绪后下一次再由渲染侧贴上去。
          */
         lvglcj_record_error(LVGLCJ_ERR_BACKEND_FAILURE, disp, 0, __func__,
-                            "暂存区或纹理尚未就绪：本帧保留待上传（不丢弃）");
-        return;
+                            "暂存槽或纹理尚未就绪：本帧保留待上传（不丢弃）");
+        return 0;
     }
 
     SDL_Rect r;
-    r.x = g_upd_rect.x1;
-    r.y = g_upd_rect.y1;
-    r.w = g_upd_rect.x2 - g_upd_rect.x1 + 1;
-    r.h = g_upd_rect.y2 - g_upd_rect.y1 + 1;
-    if (SDL_UpdateTexture(g_texture, &r, g_upd_stage, g_upd_pitch) != 0) {
+    r.x = s->rect.x1;
+    r.y = s->rect.y1;
+    r.w = s->rect.x2 - s->rect.x1 + 1;
+    r.h = s->rect.y2 - s->rect.y1 + 1;
+    if (SDL_UpdateTexture(g_texture, &r, s->buf, s->pitch) != 0) {
         /* 同理：失败也保留，让下一次再试，而不是静默丢帧 */
         lvglcj_record_error(LVGLCJ_ERR_BACKEND_FAILURE, disp, 0, __func__, SDL_GetError());
-        return;
+        return 0;
     }
 
     /*
      * ★ 顺带把这一条带镜像进整帧副本（截图用）。
-     *   暂存区是**按区域宽度紧凑排列**的（见 display.c 的行距说明），
+     *   暂存槽里是**按区域宽度紧凑排列**的（见 display.c 的行距说明），
      *   而整帧是按屏宽排列的，所以这里必须逐行搬，不能整块 memcpy。
      */
     if (g_frame != NULL && g_frame_w > 0 && g_frame_h > 0) {
@@ -369,7 +483,7 @@ static void sdl2_apply_texture_update(int64_t disp)
             for (int32_t i = 0; i < r.h; i++) {
                 memcpy(g_frame + (size_t)(r.y + i) * (size_t)g_frame_pitch +
                            (size_t)r.x * (size_t)bpp,
-                       g_upd_stage + (size_t)i * (size_t)g_upd_pitch,
+                       s->buf + (size_t)i * (size_t)s->pitch,
                        (size_t)r.w * (size_t)bpp);
             }
             atomic_store(&g_frame_painted, 1);
@@ -377,7 +491,8 @@ static void sdl2_apply_texture_update(int64_t disp)
         }
     }
 
-    atomic_store(&g_upd_valid, 0);
+    atomic_store(&s->valid, 0); /* 本槽已消费：生产者可以复用它了 */
+    return 1;
 }
 
 static void sdl2_flush_sink(int64_t disp, const lv_area_t *area, uint8_t *px_map,
@@ -424,8 +539,8 @@ static void sdl2_flush_sink(int64_t disp, const lv_area_t *area, uint8_t *px_map
 
     if (atomic_load(&g_paused)) {
         /* 窗口已关闭/最小化：不再渲染，但仍要放行，否则 LVGL 卡住。
-         * 放在暂存之前：此时连拷贝都不必做。 */
-        atomic_store(&g_upd_valid, 0);
+         * 放在暂存之前：此时连拷贝都不必做 —— 顺手把已有槽标记为无效（不会有人再应用）。 */
+        sdl2_invalidate_all_slots();
         /* 诊断：这条路径会**丢弃**这一帧，而 LVGL 以为它已显示（见下方 flush_ready）。
          * 只报第一次：这条路径本就不该频繁出现，打太多会把日志淹掉。 */
         if ((int)atomic_fetch_add(&g_paused_drop, 1) + 1 == 1) {
@@ -436,9 +551,15 @@ static void sdl2_flush_sink(int64_t disp, const lv_area_t *area, uint8_t *px_map
         return;
     }
 
-    /* 拷进后端自己的暂存区，交给渲染线程上传
+    /* 拷进后端自己的暂存槽，交给渲染线程上传
      * （见上方长注释：跨线程上传会被静默丢弃；也不要传指向 LVGL 缓冲的指针） */
-    sdl2_stage_texture_update(disp, area, px_map, stride);
+    int slot = sdl2_stage_texture_update(disp, area, px_map, stride);
+    /*
+     * ★ 序号由 stage 生成，这里**取回来用**，不能自己再自增一次 ——
+     *   自增就会出现"等待的序号"与"暂存的序号"不一致，结果是每次 flush 都等满超时
+     *   （因为等的是一个永远不会被消费的序号）。这个坑只有把生成点收敛到一处才能避免。
+     */
+    uint32_t seq = atomic_load(&g_upd_seq);
 
     if (sdl2_on_render_thread()) {
         /*
@@ -447,7 +568,7 @@ static void sdl2_flush_sink(int64_t disp, const lv_area_t *area, uint8_t *px_map
          *   线程就是当前线程，它会等到超时，每帧白等 100ms。
          *   本线程就是渲染线程，所以这里也顺带完成上传。
          */
-        sdl2_apply_texture_update(disp);
+        (void)sdl2_apply_texture_update(disp, slot);
         sdl2_render_now();
         lvglcj_display_flush_ready(disp);
         return;
@@ -456,47 +577,45 @@ static void sdl2_flush_sink(int64_t disp, const lv_area_t *area, uint8_t *px_map
     /* 双线程（方案 A）：投递渲染请求，然后有界等待 */
     atomic_store(&g_pending, 1);
     {
-        uint32_t seq = atomic_fetch_add(&g_stage_gen, 1) + 1;
-        atomic_store(&g_upd_seq, seq);
-
         SDL_Event ev;
         memset(&ev, 0, sizeof(ev));
         ev.type = g_render_event;
-        ev.user.code = (int32_t)seq; /* 带上本次暂存的序号，供渲染侧比对 */
+        ev.user.code = (int32_t)seq;            /* 序号：用于等待与失配统计 */
+        ev.user.data2 = (void *)(intptr_t)slot; /* 槽号：消费方据此取数据 */
 
         /*
-         * ★★ 先清掉可能残留的额度，再投递我们自己的请求。
+         * ★ 这里原本有一句 sdl2_reset_done()，用来清掉"可能残留的额度"，现已移除。
          *
-         *   额度是**单标志（合并语义，不计数）**，sdl2_wait_done 上方的注释写明它成立的
-         *   前提是「同一时刻最多只有一个未决额度」。但这个前提实际上**不成立** ——
-         *   除了渲染完成，还有两处会 signal：
-         *     · sdl2_mark_paused()（窗口最小化/关闭）；
-         *     · 等待**超时**之后迟到的渲染（额度无人认领，留在标志里）。
-         *   残留额度会让下面这次等待被**立刻**满足 —— flush 提前返回并回报
-         *   flush_ready，LVGL 据此认为本帧已显示，于是继续下一帧；而本帧其实从未渲染，
-         *   它覆盖的条带此后也不会再被重画。
+         *   它当年的理由是：额度是单标志，暂停路径与迟到的渲染都可能留下无人认领的
+         *   额度，而后来的等待会被它**立刻**满足 —— 于是 flush 提前返回、回报
+         *   flush_ready，LVGL 继续下一帧，覆盖掉还没被消费的条带。
+         *   那个理由本身是对的（实测也确认暂停路径会留下额度），但它只治症状：
+         *   只要等待的含义仍是"有过一次唤醒"，就永远存在被别人唤醒满足的可能。
          *
-         *   表现（实测于全控件示例）：滚动之后画面上出现**重影** —— 同一个键盘的按键行
-         *   出现在多个 y 位置、同一张卡片的标题出现两次，因为那些旧位置的像素从未被覆盖。
-         *   视觉上很像"控件抖动"，但成因完全不同：不是位置在抖，是旧像素没被清掉。
-         *
-         *   清零是安全的：本线程此刻最多只有一个未决请求（flush 是串行的，
-         *   上一次的等待已经返回），所以不可能误清"属于别人"的额度。
+         *   现在等待按**序号**判定（见 g_applied_seq 的实测说明），别人的唤醒满足不了
+         *   任何具体序号 —— "残留额度"这个概念随之消失，所以补丁可以撤掉。
          */
-        sdl2_reset_done();
-
         if (SDL_PushEvent(&ev) != 1) {
             /* 事件队列满：主线程已跟不上。记录后仍要走放行路径，不能卡住 */
             lvglcj_record_error(LVGLCJ_ERR_BACKEND_FAILURE, disp, 0, __func__,
                                 "SDL_PushEvent 失败（事件队列可能已满）");
         }
     }
-    if (sdl2_wait_done(SDL2_WAIT_TIMEOUT_MS) != 0) {
+    /*
+     * 等的是**本次的序号**被消费（上传进纹理），而不是"画面已呈现"。
+     * 这个区别是这次修改的要害：KMSDRM 上 Present 是 GL + page flip，可能超过
+     * 100ms 的等待上限，而"暂存区能不能复用"只取决于上传 —— 让 Present 拖累
+     * 生产者，就会导致超时返回 + 覆盖未消费数据 = 画面上那条带变纯黑。
+     *
+     * ★ 超时仍要放行（否则 LVGL 永久停在等 flush），但此时那条带的像素确实没进
+     *   纹理 —— waitTimeoutCount / staleApplyCount 就是这条路径的判据，长跑里
+     *   应当恒为 0。
+     */
+    if (sdl2_wait_done(seq, SDL2_WAIT_TIMEOUT_MS) != 0) {
         atomic_fetch_add(&g_wait_timeout_count, 1);
         lvglcj_record_error(LVGLCJ_ERR_BACKEND_FAILURE, disp, 0, __func__,
-                            "flush 等待渲染完成超时（100ms），本帧可能未呈现");
+                            "flush 等待本帧被消费超时（100ms），本帧可能未呈现");
     }
-    atomic_store(&g_pending, 0);
 
     /* ★ 无论成功还是超时都要放行 —— 超时不放行会让 LVGL 永久停在等 flush */
     lvglcj_display_flush_ready(disp);
@@ -517,7 +636,12 @@ static void sdl2_flush_wait_sink(int64_t disp, void *user)
     if (!atomic_load(&g_pending)) {
         return;
     }
-    if (sdl2_wait_done(SDL2_WAIT_TIMEOUT_MS) != 0) {
+    /*
+     * 等的是"最新提交的那个序号"被消费。这里取 g_stage_gen（最新序号）而非某个具体
+     * 请求的序号：调用方（flush_wait）的语义是"把在途的渲染做完再继续"。
+     * 错误文案保持原样（可能有测试按文案匹配）。
+     */
+    if (sdl2_wait_done(atomic_load(&g_stage_gen), SDL2_WAIT_TIMEOUT_MS) != 0) {
         atomic_fetch_add(&g_wait_timeout_count, 1);
         lvglcj_record_error(LVGLCJ_ERR_BACKEND_FAILURE, disp, 0, __func__,
                             "flush_wait 等待渲染完成超时（100ms）");
@@ -643,11 +767,12 @@ int32_t lvglcj_sdl2_init(int32_t w, int32_t h, int32_t color_format, int32_t buf
         return LVGLCJ_ERR_BACKEND_FAILURE;
     }
 
-    /* 复位「渲染完成」额度：不要继承上一次 init 的未决额度 */
+    /* 复位等待协议状态：不要继承上一次 init 的"已消费序号" */
     sdl2_reset_done();
     atomic_store(&g_paused, 0);
     atomic_store(&g_quit_requested, 0);
     atomic_store(&g_pending, 0);
+    atomic_store(&g_present_delay_ms, 0); /* 注入钩子不跨会话残留 */
 
     g_tex_w = w;
     g_tex_h = h;
@@ -750,19 +875,23 @@ int32_t lvglcj_sdl2_deinit(void)
     atomic_store(&g_stale_apply, 0);
     atomic_store(&g_upd_seq, 0);
     atomic_store(&g_stage_gen, 0);
+    atomic_store(&g_slot_clobber, 0);
+    atomic_store(&g_slot_next, 0);
 
-    /* 渲染暂存区归后端所有，随会话释放 —— 不清掉就是每次 init/deinit 漏一块 */
-    free(g_upd_stage);
+    /* 渲染暂存槽归后端所有，随会话释放 —— 不清掉就是每次 init/deinit 漏一块 */
+    for (int i = 0; i < SDL2_STAGE_SLOTS; ++i) {
+        free(g_slots[i].buf);
+        g_slots[i].buf = NULL;
+        g_slots[i].cap = 0;
+        g_slots[i].pitch = 0;
+        atomic_store(&g_slots[i].valid, 0);
+    }
     /* 截图用的整帧副本同理 */
     free(g_frame);
     g_frame = NULL;
     g_frame_w = 0;
     g_frame_h = 0;
     atomic_store(&g_frame_painted, 0);
-    g_upd_stage = NULL;
-    g_upd_stage_cap = 0;
-    g_upd_pitch = 0;
-    atomic_store(&g_upd_valid, 0);
 
     return LVGLCJ_OK;
 }
@@ -789,23 +918,43 @@ int32_t lvglcj_sdl2_poll_events(void)
                 /* 测试注入：故意不响应，让等待方走超时分支 */
                 continue;
             }
-            /* ★ 顺序要紧：先上传（在主线程上做，见 sdl2_apply_texture_update 的说明），
-             *   再渲染、再唤醒等待方 —— 唤醒意味着"本帧已经用上了这块像素"，  */
             /*
+             * ★★ 顺序是这个协议的核心，而这次是**实测逼出来的**：
+             *      上传 → **声明该序号已被消费（放行）** → 再渲染/呈现。
+             *
+             *   为什么放行必须紧跟上传、而不是等 Present 完成：
+             *   对生产者而言，"等待返回"的含义是「我那块暂存数据已经被消费，
+             *   可以写下一块了」。所以放行的充分条件就是**上传完成** ——
+             *   Present 属于另一件事，它与"暂存区能否复用"无关。
+             *
+             *   KMSDRM 上 Present 是 GL + KMS page flip，在 Zero 2W 上会超过 100ms
+             *   的等待上限：原先放行在 Present 之后，于是每轮都有 4~8 次超时、
+             *   12~13 次 staleApply，画面上出现**条带高度整数倍的纯黑带**，
+             *   位置每次随机（超时发生在哪条带上是随机的）。
+             *   改到这里之后同一场景重测：waitTimeout 0、staleApply 0、黑带消失。
+             *
              * ★ 事件带的是投递时暂存数据的序号。若当前序号更大，说明这期间又 stage 过
-             *   一次 —— 也就是**上一次等待提前返回过**（协议漏了一次）。这里只记一笔：
-             *   sdl2_apply_texture_update 永远按暂存区**自带的矩形**应用，
-             *   所以"新像素贴到旧矩形上"这种画错在结构上不可能发生。
-             *   这个计数是使用者的判据：长期为 0 才说明额度配对从未漏过。
+             *   一次 —— 也就是**上一次等待提前返回过**。sdl2_apply_texture_update 永远
+             *   按暂存区**自带的矩形**应用，所以"新像素贴到旧矩形上"这种画错在结构上
+             *   不可能发生；但那条带原来的像素确实丢了，所以这个计数值得长期盯。
              */
             if (ev.user.code != (int32_t)atomic_load(&g_upd_seq)) {
                 atomic_fetch_add(&g_stale_apply, 1);
             }
 
-            sdl2_apply_texture_update(LVGLCJ_HANDLE_NULL);
-            sdl2_render_now();
+            sdl2_apply_texture_update(LVGLCJ_HANDLE_NULL, (int)(intptr_t)ev.user.data2);
+
+            /* 数据已被消费 → 立刻放行（生产者的等待只等这件事，见上方说明） */
             atomic_store(&g_pending, 0);
-            sdl2_signal_done();
+            sdl2_mark_applied((uint32_t)ev.user.code);
+
+            /* 测试注入：让 Present 变慢，用来复现"消费慢于等待上限"那条路径 */
+            int32_t delay_ms = atomic_load(&g_present_delay_ms);
+            if (delay_ms > 0) {
+                SDL_Delay((Uint32)delay_ms);
+            }
+
+            sdl2_render_now();
         } else if (ev.type == SDL_QUIT) {
             sdl2_mark_paused(1);
         } else if (ev.type == SDL_WINDOWEVENT) {
@@ -999,15 +1148,48 @@ int32_t lvglcj_sdl2_present_count(void)
 }
 
 /*
- * 渲染事件与暂存数据**序号不匹配**的次数。
+ * 渲染事件序号 ≠ 最新 staged 序号的次数。
  *
- * 这是"等待额度配对"是否漏过的判据：长期为 0 = 每次 flush 都等到的是**自己那次**渲染；
- * 一旦增长，说明有过一次提前返回 —— 那次覆盖的条带不会再被重画（残影）。
- * 它同时是一个回归哨兵：@see sdl2_flush_sink 里 sdl2_reset_done 的说明。
+ * ★ 含义要说准（这一点是被实测纠正的）：它**只说明生产者跑在消费者前面**，
+ *   在慢消费者（KMSDRM 上的 Present）上出现是正常的，**不等于画错** ——
+ *   事件自带槽号与矩形，贴上去的仍是它自己那块数据。
+ *   真正"丢数据"的判据是 lvglcj_sdl2_slot_clobber_count()。
  */
 int32_t lvglcj_sdl2_stale_apply_count(void)
 {
     return atomic_load(&g_stale_apply);
+}
+
+/*
+ * **真正丢数据**的次数：取到的暂存槽还没被应用，就又被写了一次。
+ *
+ * 这是"画面上有没有条带没被写过"的直接判据，长期必须为 0。
+ * 修复前暂存区只有一块，所以每次等待超时都必然走这条分支 —— 在 KMSDRM 上
+ * 表现为渲染条带高度整数倍的**纯黑带**（实测它与 waitTimeout 同步增长：
+ * 三次运行分别是 4/6、15/14、11/10；换 dummy 驱动（Present 免费）则两者归零、黑带消失）。
+ */
+int32_t lvglcj_sdl2_slot_clobber_count(void)
+{
+    return atomic_load(&g_slot_clobber);
+}
+
+/*
+ * 当前**实际生效**的 SDL 视频驱动名（"x11" / "KMSDRM" / "dummy" / "wayland" ...）。
+ *
+ * ★★ 为什么必须有它：`SDL_VIDEODRIVER=kmsdrm` 不是一个命令，而是一个**请求**。
+ *    当该驱动不可用时（没有已连接的显示器、DRM master 被桌面占着、
+ *    这份 libSDL2 没编 KMS 支持），SDL **不会报错退出**，而是静默回落到
+ *    它还能用的驱动 —— 程序照跑、帧照 Present、计数照涨。
+ *    于是"kmsdrm 跑通了"会变成一个**没有任何依据**的结论，而且它看起来
+ *    和真跑通了一模一样。要判定，只能反过来问它：你实际用的是谁？
+ *
+ * 返回的字符串由 SDL 持有（生命周期同视频子系统），调用方不要释放。
+ * 视频未初始化时返回 `""` 而不是 NULL —— 免得调用方在空指针上取值。
+ */
+const char *lvglcj_sdl2_video_driver(void)
+{
+    const char *name = SDL_GetCurrentVideoDriver();
+    return (name != NULL) ? name : "";
 }
 
 int32_t lvglcj_sdl2_wait_timeout_count(void)
@@ -1028,6 +1210,13 @@ int32_t lvglcj_sdl2_is_render_thread(void)
 int32_t lvglcj_sdl2_set_render_suppressed(int32_t on)
 {
     atomic_store(&g_render_suppressed, on ? 1 : 0);
+    return LVGLCJ_OK;
+}
+
+/* 测试注入：把 Present 注入成慢动作（见头文件说明）。负数视为 0。 */
+int32_t lvglcj_sdl2_set_present_delay(int32_t ms)
+{
+    atomic_store(&g_present_delay_ms, ms > 0 ? ms : 0);
     return LVGLCJ_OK;
 }
 

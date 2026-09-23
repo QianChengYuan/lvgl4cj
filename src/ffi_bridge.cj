@@ -265,6 +265,15 @@ foreign func lvglcj_sdl2_wait_timeout_count(): Int32
  * 非 0 = 某次 flush 的等待被提前满足过，那条带的内容不会再被重画（画面残留旧像素）。 */
 foreign func lvglcj_sdl2_stale_apply_count(): Int32
 
+/* **真正丢数据**的次数（长期必须为 0）：暂存槽还没被应用就又被写。
+ * 与 staleApply 含义不同 —— 后者只表示生产者跑在消费者前面，慢消费者上出现是正常的。 */
+foreign func lvglcj_sdl2_slot_clobber_count(): Int32
+
+/* 当前**实际生效**的 SDL 视频驱动名（"x11" / "KMSDRM" / "dummy" ...）。
+ * SDL_VIDEODRIVER 只是请求：驱动不可用时 SDL 静默回落，程序照跑。
+ * 未初始化时返回 ""（非 NULL）。返回的字符串归 SDL 所有，不要释放。 */
+foreign func lvglcj_sdl2_video_driver(): CString
+
 /* 取走累计的滚轮格数（取走后清零；正值 = 滚轮向上）。
  * ★ 滚轮不走 indev：LVGL 的 encoder 在导航模式下只移动焦点，不滚动视图。 */
 foreign func lvglcj_sdl2_take_wheel_steps(): Int32

@@ -481,9 +481,20 @@ def find_repeats(labels, box, win=8, gap=10, cols=96, min_run=20):
     重影检测：把每行降采样成 cols 个标签做签名，找「同一串签名在相隔较远的 y 再次出现」。
     这正是"旧像素没被清掉 / 同一内容画了两次"的形状。
 
-    ★ 必须过滤掉「没有内容的窗口」：卡片内部的**纯色空行**签名天然相同，
-      不过滤的话会刷出几十条 y=70..75 与 y=80..85 之类的噪音，把真正的重影埋掉。
-      判据：窗口里至少要有一定比例的**内容像素**（白/浅/蓝/绿/红/黄）。
+    ★ 必须过滤掉「看不见的重复」，否则会刷出大量噪音把真重影埋掉。
+      这个判据被实测打回**四次**，四种噪音各不相同，都记在这里：
+        1. 卡片内部的**纯色空行**签名天然相同 → 判据：窗口要有一定比例的**内容像素**
+           （白/浅/蓝/绿/红/黄），否则刷出几十条 y=70..75 与 y=80..85。
+        2. 样式统一的卡片**边缘长得像** → 判据：要求连续 >=min_run 行都相同（见下）。
+        3. **同一块填充被自身重复**（圆角按钮标签上下的对称内边距：94..112 与 128..146
+           逐行全等）→ 判据 b)，且 b) 必须作用在**匹配窗口本身**，不能作用在
+           "延伸之后的整块"上 —— 后者会把中间的文字行合并进来，"有变化"反而变多。
+           ★ 这一步是**第四次**被实测打回才对的，两种错法都记在这里：
+             · 先只加 a)（结构化行）：按钮每条带里都有**左右边缘**（背景 + 按钮蓝
+               → 算"结构化" ✓），于是照样放行 ✗；
+             · 再把 b) 加在**整块**上：块里混入标签文字行 → 不同签名 7~8 种 ✗ 又放行。
+           改成对**窗口**要求 `distinct >= 3` 之后误报才消失，而两张真截图里的重影
+           一处都没少（有回归对照）。
     返回 (命中列表, 被判为无内容而跳过的窗口数)。
     """
     x0, y0, bw, bh = box
@@ -499,15 +510,22 @@ def find_repeats(labels, box, win=8, gap=10, cols=96, min_run=20):
     def content_sig(seg):
         blob = b"".join(seg)
         content = sum(1 for v in blob if v in CONTENT)
-        return blob, content
+        # 「结构化行」= 这一行不止一种颜色（存在边缘/文字/图形）
+        structured = sum(1 for r in seg if len(set(r)) >= 2)
+        # 「窗口内的变化」= 这几行彼此**不全相同**。
+        # ★★ 这是关键判据（第四次被实测打回才找到）：
+        #    一个窗口如果整块是同一行重复，它在别处再出现一次是**看不见的** ——
+        #    重复它自己仍然是同一片颜色。所以这种"重复"根本不值得报。
+        distinct = len(set(seg))
+        return blob, content, structured, distinct
 
     seen = {}
     hits = []
     skipped = 0
     for y in range(0, len(sigs) - win + 1):
         seg = sigs[y:y + win]
-        key, content = content_sig(seg)
-        if content < need_content or len(set(key)) < 2:
+        key, content, structured, distinct = content_sig(seg)
+        if content < need_content or structured < 2 or distinct < 3:
             skipped += 1
             continue
         if key in seen:
@@ -522,8 +540,8 @@ def find_repeats(labels, box, win=8, gap=10, cols=96, min_run=20):
                     run += 1
                 total = run + win
                 if total >= min_run:
-                    hits.append((prev + y0, prev + run + win - 1 + y0,
-                                 y + y0, y + run + win - 1 + y0, content, total))
+                    hits.append((prev + y0, prev + total - 1 + y0,
+                                 y + y0, y + total - 1 + y0, content, total))
         else:
             seen[key] = y
     # 去掉互相重叠的报告，按重复块长度排序（越长越可能是真重影）
@@ -625,6 +643,28 @@ def report(img, src_name):
             note = "  ← 与卡片节距成倍数（可能只是同类卡片内部布局相同）" if like_pitch(off) else ""
             print("      y=%d..%d  与  y=%d..%d  完全相同（重复块 %d 行，错位 %d px，内容像素 %d）%s"
                   % (a1, b1, a2, b2, total, off, content, note))
+        # ★★ 更有力的一步：看**非结构性错位**的分布。
+        #   真重影是"一整条带被落在后面"，于是同一个错位会**反复出现**
+        #   （实测于问题截图：45 px 出现 4 次 —— 45 正好像一次滚动步进）。
+        #   而自相似图形（按钮内边距、同类卡片）只是偶尔撞上某个错位，值也散。
+        #   所以"有没有一个错位反复出现"比任何单条命中都更能说明问题。
+        #   ★ 说清它看不见什么：**高度重复的内容**（键盘那种每行按键都长一样的区域）
+        #     被复制时，与"它本来就有更多行"在逐行签名上无法区分 —— 这类会漏报。
+        #     判据是候选而不是判决，正因如此。
+        offs = {}
+        for h in reps:
+            off = h[2] - h[0]
+            if not like_pitch(off):
+                offs[off] = offs.get(off, 0) + 1
+        if offs:
+            ranked = sorted(offs.items(), key=lambda kv: (-kv[1], kv[0]))
+            print("      ★ 非结构性错位分布：%s"
+                  % "、".join("%d px×%d 次" % (k, v) for k, v in ranked))
+            if ranked[0][1] >= 2:
+                print("      ★★ 错位 %d px 反复出现 %d 次 —— 真重影的特征指纹"
+                      % (ranked[0][0], ranked[0][1]))
+                print("         （自相似图形只会偶尔撞上某个错位；同一错位反复出现，")
+                print("           说明有一整条带被落在后面：典型的旧像素未清）")
         print("      → 重复块长、且错位与卡片节距无关时，即是「同一块内容画了两次」；")
         print("        那说明旧像素没被清掉，而不是内容位置在抖。")
     else:

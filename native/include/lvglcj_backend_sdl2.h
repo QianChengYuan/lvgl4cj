@@ -108,8 +108,20 @@ int32_t lvglcj_sdl2_wait_timeout_count(void); /* 有界等待超时次数（正�
  * 判据：长期为 0 = 每次 flush 都等到的是自己那次渲染；
  * 增长 = 有过提前返回，那次覆盖的条带不会重画（画面残留旧像素）。 */
 int32_t lvglcj_sdl2_stale_apply_count(void);
+
+/* **真正丢数据**的次数：取到的暂存槽还没被应用就又被写。长期必须为 0。
+ * 与 staleApply 的区别：staleApply 只表示"生产者跑在消费者前面"（慢消费者上正常）；
+ * 这一项才是"画面上有条带没被写过"的直接判据（KMSDRM 上表现为纯黑带）。 */
+int32_t lvglcj_sdl2_slot_clobber_count(void);
 int32_t lvglcj_sdl2_is_paused(void);          /* 窗口关闭/最小化后为 1 */
 int32_t lvglcj_sdl2_is_render_thread(void);   /* 当前线程是否为渲染线程 */
+
+/* 当前**实际生效**的 SDL 视频驱动名（"x11" / "KMSDRM" / "dummy" ...）。
+ *
+ * ★ 判定"是不是真在 kmsdrm 上"只能靠它：SDL_VIDEODRIVER 只是**请求**，
+ *   驱动不可用时 SDL 会静默回落到别的驱动，程序照跑、计数照涨。
+ *   返回的字符串归 SDL 所有，不要释放；未初始化时返回 ""（非 NULL）。 */
+const char *lvglcj_sdl2_video_driver(void);
 
 /*
  * 颜色格式 → SDL 像素格式映射查询。
@@ -124,6 +136,16 @@ uint32_t lvglcj_sdl2_pixel_format_for(int32_t lv_color_format);
  * 生产代码不会调用它；存在的意义是「超时分支不能只靠读代码相信」。
  */
 int32_t lvglcj_sdl2_set_render_suppressed(int32_t on);
+
+/*
+ * 让 Present 人为变慢（毫秒），用于验证「放行只等上传、不等 Present」这条修改。
+ *
+ * 为什么需要它：KMSDRM 上 Present 是 GL + KMS page flip，可能超过 100ms 的等待上限 ——
+ * 那正是"画面上出现条带高度整数倍的纯黑带"的成因（见 g_applied_seq 的说明）。
+ * dummy 驱动上 Present 几乎免费，复现不出这条路径；只有把 Present 注入成慢动作，
+ * 这条路径才在 CI 里可回归。生产代码不会调用它。
+ */
+int32_t lvglcj_sdl2_set_present_delay(int32_t ms);
 /* 模拟窗口关闭（不经真实 SDL 事件），用于验证即时解锁 */
 int32_t lvglcj_sdl2_inject_quit(void);
 

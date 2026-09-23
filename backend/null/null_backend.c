@@ -39,6 +39,16 @@ __attribute__((weak)) int32_t lvglcj_sdl2_screenshot(const char *path)
     return LVGLCJ_ERR_NOT_SUPPORTED;
 }
 
+/*
+ * 视频驱动名：headless 下没有视频子系统，按同一约定给出**空串**（不是 NULL）。
+ * 调用方（示例/测试）据此看到的是"未初始化"而不是一个凭空的驱动名 ——
+ * 这一点很重要：这个函数存在的意义就是**不让人凭想象作答**。
+ */
+__attribute__((weak)) const char *lvglcj_sdl2_video_driver(void)
+{
+    return "";
+}
+
 static int64_t g_null_display = LVGLCJ_HANDLE_NULL;
 
 int32_t lvglcj_null_init(int32_t w, int32_t h, int32_t color_format, int32_t buf_lines)

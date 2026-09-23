@@ -271,6 +271,59 @@ int main(void)
         CHECK(g_flush_elapsed_ms >= 0 && g_flush_elapsed_ms < 90,
               "★ 一次超时后链路恢复正常（往返 < 90ms），未永久退化");
     }
+    /* ============================================ ★★ Present 慢于等待上限：不得丢带
+     *
+     * 这是实测缺陷的哨兵（Raspberry Pi Zero 2 W + KMSDRM，1920×1080）：
+     *   KMSDRM 上 Present 是 GL + KMS page flip，可能超过 100ms 的等待上限。
+     *   原先"放行"发生在 Present 之后 —— 于是 flush 等到超时返回，而它那条带仍在
+     *   事件队列里；LVGL 继续渲染下一条带并**覆盖暂存区**，队列里那个事件的像素
+     *   再没人消费 → 画面上那条带变成**纯黑**。
+     *   实测特征：黑带高度恰是渲染条带高度的整数倍、位置每次随机；
+     *             同一轮 waitTimeout 4~8、staleApply 12~13；换 dummy（Present 免费）全为 0。
+     *
+     * 修复后：放行只等**上传完成**（暂存区可复用），不等 Present；且等待按**序号**判定。
+     * 本用例把 Present 注入成 300ms，连做三轮「另一线程 flush + 主线程服务」：
+     *   · 等待仍必须有界（<90ms）—— 因为它只覆盖上传；
+     *   · 不得出现等待超时，也不得出现 staleApply。
+     * ★ 修复前这里必然失败（等待等的是 Present，每轮都会超时），所以它有鉴别力。
+     */
+    printf("\n-- ★★ Present 慢于等待上限时不得丢带 --\n");
+    {
+        int t_before = lvglcj_sdl2_wait_timeout_count();
+        int s_before = lvglcj_sdl2_stale_apply_count();
+        int p_before = lvglcj_sdl2_present_count();
+        CHECK(lvglcj_sdl2_set_present_delay(300) == LVGLCJ_OK,
+              "注入：Present 变慢 300ms（远超 100ms 等待上限）");
+
+        int64_t worst = 0;
+        for (int round = 0; round < 3; ++round) {
+            pthread_t th;
+            g_flush_elapsed_ms = -1;
+            pthread_create(&th, NULL, flush_thread_main, NULL);
+            int64_t t0 = now_ms();
+            /* 主线程照常服务渲染请求；每次服务都要在 Present 上花 300ms */
+            while (g_flush_elapsed_ms < 0 && (now_ms() - t0) < 2000) {
+                lvglcj_sdl2_poll_events();
+                usleep(1000);
+            }
+            pthread_join(th, NULL);
+            if (g_flush_elapsed_ms > worst) {
+                worst = g_flush_elapsed_ms;
+            }
+        }
+        printf("        （三轮里最慢一次 flush 耗时 %lld ms）\n", (long long)worst);
+
+        CHECK(lvglcj_sdl2_present_count() > p_before,
+              "★ 慢 Present 确实发生过（注入有效，而不是没跑到）");
+        CHECK(worst >= 0 && worst < 90,
+              "★★ flush 不再等 Present：Present 要 300ms，等待仍只覆盖上传（<90ms）");
+        CHECK(lvglcj_sdl2_wait_timeout_count() == t_before,
+              "★★ 不得有等待超时（修复前：等的是 Present，每轮必然超时）");
+        CHECK(lvglcj_sdl2_stale_apply_count() == s_before,
+              "★★ 不得有 staleApply：暂存区绝不会在未消费时被覆盖（黑带的直接成因）");
+        lvglcj_sdl2_set_present_delay(0);
+    }
+
     /* 排空遗留事件，避免影响后续用例 */
     for (int i = 0; i < 5; ++i) {
         lvglcj_sdl2_poll_events();
@@ -327,43 +380,73 @@ int main(void)
         CHECK(lvglcj_sdl2_screenshot(NULL) == LVGLCJ_ERR_INVALID_ARGUMENT, "空路径被拒");
     }
 
-    /* ============================================ ★ 残留额度不得让下一次 flush 提前返回
+    /* ============================================ ★★★ 超时不得等于丢数据（多槽暂存）
      *
-     * 额度是**单标志（合并语义，不计数）**，sdl2_wait_done 上方的注释写明它成立的前提是
-     * 「同一时刻最多只有一个未决额度」。而**等待超时**会破坏这个前提：
-     * flush 超时返回后，它自己的渲染请求**仍在事件队列里**；稍后主线程照常处理它、
-     * 渲染并 signal —— 此刻没有等待方，于是这一次额度无人认领，留在标志里。
-     * 下一次 flush 的等待会被它立刻满足：flush 提前返回并回报 flush_ready，
-     * 而它自己那一帧根本没渲染 —— 那条带的内容从此再也不会被重画（画面残留旧像素）。
+     * 这是"KMSDRM 纯黑带"那类现象的直接判据。做法：
+     *   1. 注入"忽略渲染请求"（§8.1.2 要求 2 用的同一个钩子）——
+     *      事件会被取走但**不上传**，于是每条带的暂存数据都不会被消费；
+     *   2. 连做 3 次 flush（每次等满 100ms 超时返回）；
+     *   3. 断言 slotClobber 不增长。
      *
-     * ★ 本用例钉住的是「额度不会**跨** flush 泄漏」这条不变量：
-     *   两次都无人服务，因此两次都必须等满超时才返回。
-     *
-     * ★★ 但要把话说清楚：它**没有**证明 sdl2_reset_done() 修复了什么。
-     *   做负向对照（把那一行摘掉）后本用例**依旧通过** —— 也就是说这条路径下
-     *   根本不会留下残留额度（抑制注入那条路也试过：事件已被 SDL_PollEvent 取走，
-     *   同样留不下）。所以那一行是**防御性**的，不是某个已复现缺陷的解药。
-     *   留在这里的理由只有一条：sdl2_wait_done 上方的注释把「同一时刻最多只有一个
-     *   未决额度」当作前提，而清零让这个前提**不依赖**任何路径分析就成立。
-     *
-     * ★ 这也是本项目的一条经验：负向对照跑不出差别时，最该做的事是把"我修好了什么"
-     *   改成"我钉住了什么不变量"，而不是把推理写成结论。
+     * ★ 若暂存区只有**一块**，第 2、3 次 flush 必然覆盖还没被消费的数据 ——
+     *   那正是画面上"渲染条带高度整数倍的纯黑带"的成因。所以本用例有鉴别力：
+     *   把 SDL2_STAGE_SLOTS 改成 1，它就会失败（负向对照做过）。
      */
-    printf("\n-- ★ 残留额度不得让下一次 flush 提前返回 --\n");
+    printf("\n-- ★★★ 超时不得等于丢数据（多槽暂存）--\n");
+    {
+        int c_before = lvglcj_sdl2_slot_clobber_count();
+        int t_before = lvglcj_sdl2_wait_timeout_count();
+        CHECK(lvglcj_sdl2_set_render_suppressed(1) == LVGLCJ_OK,
+              "注入：忽略渲染请求（事件被取走但不上传 → 暂存槽不会被消费）");
+        for (int round = 0; round < 3; ++round) {
+            int64_t el = run_flush_in_thread();
+            printf("        （第 %d 次：无人消费，耗时 %lld ms）\n", round + 1, (long long)el);
+            CHECK(el >= 95 && el < 300, "无人消费时必须等满超时（有界返回）");
+            lvglcj_sdl2_poll_events(); /* 把事件取走（不应用） */
+        }
+        CHECK(lvglcj_sdl2_wait_timeout_count() > t_before,
+              "★ 超时确实发生了（这正是要考察的路径，不是没跑到）");
+        CHECK(lvglcj_sdl2_slot_clobber_count() == c_before,
+              "★★★ 连续超时也不得覆盖还没被应用的暂存数据（slotClobber 必须为 0）");
+        lvglcj_sdl2_set_render_suppressed(0);
+    }
+    for (int i = 0; i < 5; ++i) {
+        lvglcj_sdl2_poll_events();
+    }
+
+    /* ============================================ ★ 别人的唤醒不得误放行本帧
+     *
+     * 本用例钉住这条不变量：**等待必须按"我自己那个序号"判定** ——
+     * 别的 flush、暂停路径产生的唤醒，都不得让当前等待提前返回。
+     *
+     * 路径设计：
+     *   (1) 无人服务的 flush：等满超时返回（它的渲染请求仍留在事件队列里）；
+     *   (2) 现在去服务它 —— 上传完即放行，而这次放行属于**第 1 次**那个序号；
+     *   (3) 第 2 次 flush 再次无人服务：必须**仍然**等满超时 ——
+     *       第 2 次的序号还没被消费，(2) 里那次唤醒不该满足它。
+     *
+     * ★ 这里曾有一段关于 sdl2_reset_done()（"清掉残留额度"）的说明，现在改写：
+     *   旧的单标志写法确实会被"别人的唤醒"满足，那个补丁治的是这个**症状**。
+     *   但病根在谓词 —— 只要谓词是"有过一次唤醒"，就永远存在被误满足的可能
+     *   （暂停路径在无人等待时也会留下额度）。现在谓词换成了序号
+     *   （见 g_applied_seq 的实测说明），补丁连同"残留额度"这个概念一起撤掉，
+     *   而本用例的断言一字未改：它钉住的正是那个根。
+     */
+    printf("\n-- ★ 别人的唤醒不得误放行本帧 --\n");
     {
         /* (1) 无人服务的 flush：等满超时，且它的渲染请求仍留在队列里 */
         int64_t el1 = run_flush_in_thread();
         printf("        （第 1 次：无人服务，耗时 %lld ms）\n", (long long)el1);
         CHECK(el1 >= 95 && el1 < 300, "第 1 次既无人服务，就应等满超时");
 
-        /* (2) 现在去服务它：渲染 + signal，而此刻没有等待方 → 额度无人认领 */
+        /* (2) 现在去服务它：上传完即放行 —— 注意这次放行属于第 1 次的序号 */
         lvglcj_sdl2_poll_events();
 
-        /* (3) 再一次无人服务：修复后会先清掉残留额度，故仍须等满超时 */
+        /* (3) 再一次无人服务：第 2 次的序号没被消费，故仍须等满超时 */
         int64_t el2 = run_flush_in_thread();
         printf("        （第 2 次：同样无人服务，耗时 %lld ms）\n", (long long)el2);
         CHECK(el2 >= 95 && el2 < 300,
-              "★★ 残留额度已被丢弃：第 2 次仍等满超时，而不是被旧额度立刻满足");
+              "★★ 等待按序号判定：第 2 次仍等满超时，而不是被上一次的唤醒立刻满足");
         CHECK(lvglcj_sdl2_stale_apply_count() == 0,
               "★ 序号始终匹配（绝不会把新像素贴到旧矩形上）");
     }
