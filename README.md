@@ -272,19 +272,28 @@ main() {
 ## 目录结构
 
 ```
-src/            L1 仓颉接口（19 个模块 + ffi_bridge.cj + 9 个测试文件）
+src/            L1 仓颉接口：19 个模块 + ffi_bridge.cj（foreign 声明）+ 10 个测试文件
                 generated/ 由 scripts/gen_conf_const.py 生成，勿手改
-native/         C 实现（22 个 .c）
-  include/      lvglcj_bridge.h（对外契约，293 个声明，逐条注释）
-                lvglcj_internal.h（内部）
-  cmake/        含 aarch64-linux-gnu.cmake 交叉工具链
-backend/        sdl2/（窗口与 KMSDRM 直出）+ null/（无显示环境，同时提供 ABI 兜底定义）
-test/native/    C 用例（10 个）+ target_suite.sh / target_soak.sh（目标机侧执行脚本）
-native/probe/   诊断探针（6 个，用于把争议变成实测）
+native/         C 实现（23 个 .c）
+  include/      9 个头文件：lvglcj_bridge.h（对外契约，293 个声明，逐条注释）、
+                lvglcj_internal.h（内部）、两个后端头（sdl2 / null）、lvglcj_error.h、
+                callback.h、handle_table.h、lvglcj_probe.h、
+                lv_conf.h（由 scripts/gen_lv_conf.sh 生成，勿手改）
+  cmake/        aarch64-linux-gnu.cmake（交叉工具链）
+  probe/        诊断探针（6 个 C，用途是把争议变成实测）
+backend/        sdl2/（窗口与 KMSDRM 直出）+ null/（无显示环境，并提供 ABI 兜底定义）
+probe/          **仓颉侧**探针：v1 线程归属 / v3 亲和性 / c4 回调帧抛异常（各是一个 cjpm 工程）、
+                v2_capture（单个 .cj）；另有两个 C 探针 sdl_thread_texture、x11_window
+test/native/    C 用例（10 个 .c）+ target_suite.sh / target_soak.sh（目标机侧执行脚本）
 examples/       hello_cj（最小示例）、gallery_cj（全控件展示）、bench_cj（性能采集）
 scripts/        构建、门禁、性能、soak、真机部署、KMSDRM 实测、配置生成等 18 个脚本
+config/         cjlint 规则清单（门禁第 2 项的静态检查依据）
 docs/           结果与基线记录（见下）
-third_party/    LVGL 源码（由 fetch_lvgl.sh 拉取，不入库）
+libs/           构建产物的静态库（由 scripts/build_native.sh 生成，**不入库**）
+target/         仓颉构建输出（不入库）
+third_party/    LVGL 源码（由 scripts/fetch_lvgl.sh 拉取，不入库）
+
+根目录另有 README.md 与设计冻结版 lvgl4cj_设计方案_v0.4_冻结版.md（设计依据）。
 ```
 
 ---
