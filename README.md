@@ -161,6 +161,15 @@ main() {
    `LvKeyboard`、`LvChart`、`LvCanvas`。
    设计文档 §7.1 的 **P1 清单已全部完成**（10 个批次、19 个控件）。
 
+   **全控件示例**：`examples/gallery_cj` —— 把 19 个控件一次摆在窗口里（11 张卡片），
+   屏幕顶部有一行每秒刷新的统计（FPS / CPU / 刷新耗时 / 绘制耗时 / 对象数 / 动画数 / 任务队列），
+   退出时把末次采样打到 stdout。另有两个开关：
+   `--static` 关掉全部动画（用于对照「静止时是否也抖」）、`--smoke` 有界运行后干净退出。
+   运行：`cd examples/gallery_cj && cjpm run`（无显示环境可加 `SDL_VIDEODRIVER=dummy --smoke`，
+   但那样不会真正呈现，FPS 只在有显示的机器上才有意义）。
+   ★ 注意示例的初始化顺序**不是风格问题**：所有建 UI 的代码必须在 `startThreaded()` 之前，
+   之后要用 LVGL 只能走 `rt.post { }`（主线程已不是 LVGL 线程，直接调 `lv_*` 会被断言拒绝）。
+
    ★ `LvChart` 的 series 用**索引**标识而不是指针 —— 这是本项目唯一一处自己维护的索引。
    原因两条：`lv_chart_series_t` 不是 `lv_obj_t`（进不了对象句柄表，也就没有"对象被删时
    自动失效"那套机制），而 `lv_chart.h` **不公开结构体**（拿不到 `chart->series[i]`，

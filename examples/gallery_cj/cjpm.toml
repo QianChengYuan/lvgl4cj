@@ -1,0 +1,29 @@
+# ============================================================================
+# gallery_cj —— 全控件示例（§7.1 的 P1 清单，19 个控件）
+#
+# 用途：① 肉眼确认 19 个控件的渲染是否正常；② 屏幕上带每秒统计行、退出时打印末次采样，
+#       于是「看着不对」能变成一串数字。
+#       另有 --static（关掉全部动画，用于对照抖动是否只在动起来时出现）
+#       与 --smoke（有界运行后干净退出）两个开关。
+#
+# link-option 用相对路径 ../../libs（相对本目录），因此请在 examples/gallery_cj 下执行 cjpm。
+# ============================================================================
+[package]
+  cjc-version = "1.1.0"
+  name        = "gallery_cj"
+  version     = "0.1.0"
+  output-type = "executable"
+
+  src-dir    = "src"
+  target-dir = "target"
+
+  compile-option = "-Woff unused"
+  # 静态库顺序：被依赖者在前（后端依赖 bridge，bridge 依赖 lvgl）
+  link-option    = "-L../../libs -llvgl4cj_backend_sdl2 -llvgl4cj_backend_null -llvgl4cj_bridge -llvgl -lSDL2 -lpthread -lm"
+
+[dependencies]
+  lvgl4cj = { path = "../.." }
+
+[target.x86_64-unknown-linux-gnu]
+  compile-option = ""
+  link-option    = "-L../../libs -llvgl4cj_backend_sdl2 -llvgl4cj_backend_null -llvgl4cj_bridge -llvgl -lSDL2 -lpthread -lm"
