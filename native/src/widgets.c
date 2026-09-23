@@ -40,7 +40,7 @@ int64_t lvglcj_label_create(int64_t parent)
     lv_obj_t *lbl = lv_label_create(p);
     if (lbl == NULL) {
         lvglcj_record_error(LVGLCJ_ERR_OUT_OF_MEMORY, parent, 0, __func__,
-                            "lv_label_create 失败（LVGL 内存池可能已满）");
+                            "lv_label_create 失败（LVGL 内存池已满，或未启动显示导致没有默认屏幕）");
         return LVGLCJ_HANDLE_NULL;
     }
 
@@ -117,7 +117,7 @@ int64_t lvglcj_button_create(int64_t parent)
     lv_obj_t *btn = lv_button_create(p);
     if (btn == NULL) {
         lvglcj_record_error(LVGLCJ_ERR_OUT_OF_MEMORY, parent, 0, __func__,
-                            "lv_button_create 失败（LVGL 内存池可能已满）");
+                            "lv_button_create 失败（LVGL 内存池已满，或未启动显示导致没有默认屏幕）");
         return LVGLCJ_HANDLE_NULL;
     }
 
@@ -200,7 +200,7 @@ int64_t lvglcj_switch_create(int64_t parent)
     lv_obj_t *sw = lv_switch_create(p);
     if (sw == NULL) {
         lvglcj_record_error(LVGLCJ_ERR_OUT_OF_MEMORY, parent, 0, __func__,
-                            "lv_switch_create 失败（LVGL 内存池可能已满）");
+                            "lv_switch_create 失败（LVGL 内存池已满，或未启动显示导致没有默认屏幕）");
         return LVGLCJ_HANDLE_NULL;
     }
     return widget_register_created(sw, "lv_switch_t");
@@ -261,7 +261,7 @@ int64_t lvglcj_checkbox_create(int64_t parent)
     lv_obj_t *cb = lv_checkbox_create(p);
     if (cb == NULL) {
         lvglcj_record_error(LVGLCJ_ERR_OUT_OF_MEMORY, parent, 0, __func__,
-                            "lv_checkbox_create 失败（LVGL 内存池可能已满）");
+                            "lv_checkbox_create 失败（LVGL 内存池已满，或未启动显示导致没有默认屏幕）");
         return LVGLCJ_HANDLE_NULL;
     }
     return widget_register_created(cb, "lv_checkbox_t");
@@ -310,7 +310,7 @@ int64_t lvglcj_bar_create(int64_t parent)
     lv_obj_t *bar = lv_bar_create(p);
     if (bar == NULL) {
         lvglcj_record_error(LVGLCJ_ERR_OUT_OF_MEMORY, parent, 0, __func__,
-                            "lv_bar_create 失败（LVGL 内存池可能已满）");
+                            "lv_bar_create 失败（LVGL 内存池已满，或未启动显示导致没有默认屏幕）");
         return LVGLCJ_HANDLE_NULL;
     }
     return widget_register_created(bar, "lv_bar_t");

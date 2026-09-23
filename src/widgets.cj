@@ -62,7 +62,7 @@ public class LvLabel <: LvObject {
         ensureLvglOwnership()
         let h = unsafe { lvglcj_label_create(parent.handle) }
         if (h <= 0) {
-            throw LvglException(OutOfMemory, "label 创建失败（LVGL 内存池可能已满）")
+            throw LvglException(OutOfMemory, "label 创建失败（LVGL 内存池已满，或未启动显示导致没有默认屏幕）")
         }
         return LvLabel(h)
     }
@@ -99,7 +99,7 @@ public class LvButton <: LvObject {
         ensureLvglOwnership()
         let h = unsafe { lvglcj_button_create(parent.handle) }
         if (h <= 0) {
-            throw LvglException(OutOfMemory, "button 创建失败（LVGL 内存池可能已满）")
+            throw LvglException(OutOfMemory, "button 创建失败（LVGL 内存池已满，或未启动显示导致没有默认屏幕）")
         }
         return LvButton(h)
     }
@@ -147,7 +147,7 @@ public class LvSwitch <: LvObject {
         ensureLvglOwnership()
         let h = unsafe { lvglcj_switch_create(parent.handle) }
         if (h <= 0) {
-            throw LvglException(OutOfMemory, "switch 创建失败（LVGL 内存池可能已满）")
+            throw LvglException(OutOfMemory, "switch 创建失败（LVGL 内存池已满，或未启动显示导致没有默认屏幕）")
         }
         return LvSwitch(h)
     }
@@ -192,7 +192,7 @@ public class LvCheckbox <: LvObject {
         ensureLvglOwnership()
         let h = unsafe { lvglcj_checkbox_create(parent.handle) }
         if (h <= 0) {
-            throw LvglException(OutOfMemory, "checkbox 创建失败（LVGL 内存池可能已满）")
+            throw LvglException(OutOfMemory, "checkbox 创建失败（LVGL 内存池已满，或未启动显示导致没有默认屏幕）")
         }
         return LvCheckbox(h)
     }
@@ -239,7 +239,7 @@ public class LvBar <: LvObject {
         ensureLvglOwnership()
         let h = unsafe { lvglcj_bar_create(parent.handle) }
         if (h <= 0) {
-            throw LvglException(OutOfMemory, "bar 创建失败（LVGL 内存池可能已满）")
+            throw LvglException(OutOfMemory, "bar 创建失败（LVGL 内存池已满，或未启动显示导致没有默认屏幕）")
         }
         return LvBar(h)
     }
