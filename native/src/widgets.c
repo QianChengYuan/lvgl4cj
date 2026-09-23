@@ -698,3 +698,58 @@ int32_t lvglcj_line_set_y_invert(int64_t line, int32_t on)
     lv_line_set_y_invert((lv_obj_t *)lvglcj_ptr_of(line), on ? true : false);
     return LVGLCJ_OK;
 }
+
+/* ------------------------------------------------------------ image */
+
+int64_t lvglcj_image_create(int64_t parent)
+{
+    return widget_create_common(parent, __func__, lv_image_create, "lv_image_t");
+}
+
+int32_t lvglcj_image_set_src(int64_t img, const char *path)
+{
+    LVGLCJ_HANDLE_GUARD(img, __func__);
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    /*
+     * ★ path == NULL 是**合法**输入，表示清空图像（LVGL 会走 UNKNOWN 分支、
+     *   释放旧的源并把 src 置空）。这里刻意不套用"NULL 即错误"的惯例：
+     *   图像没有"空字符串"这种表达方式，NULL 是表达"没有图像"的唯一途径；
+     *   而文本类 setter 用 NULL 是错误，因为那里 "" 才是"空文本"。
+     *
+     * ★ 安全性：LVGL 对 FILE 类型执行 lv_strdup(src)，会拷贝一份并由它自己释放，
+     *   所以调用方的字符串在返回后即可销毁（与 dropdown 的选项同性质）。
+     *   这也是本层不提供描述符形态的原因所在（VARIABLE 分支只存指针不拷贝）。
+     */
+    lv_image_set_src((lv_obj_t *)lvglcj_ptr_of(img), path);
+    return LVGLCJ_OK;
+}
+
+int32_t lvglcj_image_set_offset(int64_t img, int32_t x, int32_t y)
+{
+    LVGLCJ_HANDLE_GUARD(img, __func__);
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    lv_obj_t *o = (lv_obj_t *)lvglcj_ptr_of(img);
+    lv_image_set_offset_x(o, x);
+    lv_image_set_offset_y(o, y);
+    return LVGLCJ_OK;
+}
+
+int32_t lvglcj_image_set_scale(int64_t img, int32_t zoom)
+{
+    LVGLCJ_HANDLE_GUARD(img, __func__);
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    /*
+     * 底层收 uint32_t，所以负数会被隐式转成巨大的缩放值（画面炸掉且不报错）。
+     * 0 同样拦下：它不是"无缩放"（那是 256），而是一个退化的取值。
+     */
+    if (zoom <= 0) {
+        lvglcj_record_error(LVGLCJ_ERR_INVALID_ARGUMENT, img, zoom, __func__,
+                            "缩放值必须为正；注意单位不是百分比，256 = 100%");
+        return LVGLCJ_ERR_INVALID_ARGUMENT;
+    }
+    lv_image_set_scale((lv_obj_t *)lvglcj_ptr_of(img), (uint32_t)zoom);
+    return LVGLCJ_OK;
+}

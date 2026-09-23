@@ -585,6 +585,76 @@ public class LvLine <: LvObject {
     }
 }
 
+/*
+ * ===================== P1 批次 5：image（§7.1）=====================
+ * 所有权上 image 属于**轻**的一类：LVGL 会拷贝路径字符串（读实现确认：lv_strdup），
+ * 因此 L1 直接收 String 即可，不要求调用方长期持有。
+ * 这与 line（LVGL 只存指针、我们持有）形成对照 —— 同一个库里有两种完全相反的语义，
+ * 判断依据只能是**逐个核对实现**，不能按控件类别外推。
+ *
+ * ★ 本类**不提供清空图像的方法**：C 侧 set_src 支持 NULL 表示清空（那是合法语义），
+ *   但仓颉的 CString 无法表达空指针，为它单加一个 ABI 入口只是为了绕开 FFI 的表达限制，
+ *   属于把工具的形状泄进契约。需要清空时用 setSrc 换一个源即可；
+ *   确有需要时再按契约变更补一个显式的 clear。
+ */
+
+/// 图像
+public class LvImage <: LvObject {
+    private init(h: Int64) {
+        super(h)
+    }
+
+    /**
+     * 创建一个 image。创建后需 setSrc 才有内容显示。
+     *
+     * @throws[LvglException] 同 LvSwitch.create
+     */
+    public static func create(parent: LvObject): LvImage {
+        ensureLvglOwnership()
+        let h = unsafe { lvglcj_image_create(parent.handle) }
+        if (h <= 0) {
+            throw LvglException(OutOfMemory, "image 创建失败（LVGL 内存池已满，或未启动显示导致没有默认屏幕）")
+        }
+        return LvImage(h)
+    }
+
+    /**
+     * 设置图像源（文件路径，需配合已注册的文件系统驱动，如 POSIX 驱动）。
+     *
+     * ★ **路径不存在时不会抛异常** —— LVGL 只是不显示该图像（它自己打一行日志）。
+     *   本层无法在不额外付出代价的前提下提前发现（POSIX 驱动没有 exists 接口），
+     *   所以调用方若要判定"到底加载上没有"，需自行确认文件存在。
+     *   不把这件事写清楚，它在界面上会表现为"设了 src 却一片空白"。
+     *
+     * 路径字符串会被 LVGL 拷贝，传入的 String 生命周期不受约束。
+     */
+    public func setSrc(path: String): LvImage {
+        throwIfError(withCString(path) {cs => unsafe { lvglcj_image_set_src(handle, cs) }}, "image.setSrc")
+        return this
+    }
+
+    /// 偏移（像素）
+    public func setOffset(x: Int32, y: Int32): LvImage {
+        throwIfError(unsafe { lvglcj_image_set_offset(handle, x, y) }, "image.setOffset")
+        return this
+    }
+
+    /**
+     * 缩放。
+     *
+     * ★ **单位不是百分比**：`256` = 100%，`128` = 一半，`512` = 两倍。
+     *   传 `100` 会得到约 39% —— 这是 LVGL 的既有约定，此处如实透传而非换算，
+     *   因为把"百分比"这个更直观的单位引进来的同时，也就把"到底哪个是 100%"这个问题
+     *   永久地留在了两套单位之间。
+     *
+     * @throws[LvglException] InvalidArgument —— 值非正（0 不是"无缩放"，那是 256）
+     */
+    public func setScale(zoom: Int32): LvImage {
+        throwIfError(unsafe { lvglcj_image_set_scale(handle, zoom) }, "image.setScale")
+        return this
+    }
+}
+
 /// 忙碌指示器
 public class LvSpinner <: LvObject {
     private init(h: Int64) {

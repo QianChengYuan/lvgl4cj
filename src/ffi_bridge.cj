@@ -447,6 +447,26 @@ foreign func lvglcj_line_set_points(line: Int64, xy: CPointer<Int32>, point_coun
 
 foreign func lvglcj_line_set_y_invert(line: Int64, on: Int32): Int32
 
+/* ---------------- P1 批次 5：image（§7.1）----------------
+ *
+ * ★ 路径字符串由 LVGL **拷贝**（实现里是 lv_strdup，旧源由它自己 lv_free），
+ *   所以这里收 CString 是安全的 —— 与 dropdown 的选项同性质，
+ *   而不是 canvas/line 那种"LVGL 只存指针、由我们持有"的类型。
+ *
+ * ★ 契约里不提供图像描述符（lv_image_dsc_t*）形态：LVGL 对 VARIABLE 分支
+ *   只执行 img->src = src（不拷贝），那是第三类所有权问题，
+ *   而且还要把描述符的内存布局一并冻结进契约。本批只做文件路径。
+ *
+ * ★ set_scale 的单位**不是百分比**：256 = 100%，128 = 一半，512 = 两倍。
+ */
+foreign func lvglcj_image_create(parent: Int64): Int64
+
+foreign func lvglcj_image_set_src(img: Int64, path: CString): Int32
+
+foreign func lvglcj_image_set_offset(img: Int64, x: Int32, y: Int32): Int32
+
+foreign func lvglcj_image_set_scale(img: Int64, zoom: Int32): Int32
+
 /* ---------------- Canvas（§3.11.2）：自定义绘制的唯一出口 ----------------
  *
  * ★ 颜色参数的**解释方式在不同函数上不同**，调用方必须看清：

@@ -475,6 +475,49 @@ int main(void)
         CHECK(lvglcj_handle_state(ln) != LVGLCJ_HSTATE_ALIVE, "删除后不再报告 ALIVE");
     }
 
+    /* ================================================== 7g. P1 批次 5：image
+     *
+     * ★ 本段刻意**不做"能加载出图像"的断言**：那需要一个真实的图像文件与解码器，
+     *   属于端到端场景，不是控件契约的一部分。这里钉住的是契约本身：
+     *   · 路径字符串被**拷贝**（调用方字符串可立即释放，见下）
+     *   · 路径不存在时**不报错**（这是 LVGL 的既定行为，我们如实透传并写进契约）
+     *   · 缩放的**单位**是 256 = 100%，非法取值被拦
+     */
+    printf("\n-- 7g. P1 批次 5 控件（image）--\n");
+    {
+        int64_t im = lvglcj_image_create(scr);
+        CHECK(im != 0, "创建 image");
+
+        /*
+         * ★ 用**栈上的临时缓冲区**作路径，并在调用后立刻覆写它。
+         *   这正是在验证"LVGL 会拷贝路径"这一契约：实现里是 lv_strdup，
+         *   所以覆写调用方的缓冲区不该影响已设置的源。
+         *   若哪天它改成"只存指针"，这个用例会在 ASan 下立刻报出使用已释放内存。
+         */
+        char path[32];
+        strcpy(path, "A:/does/not/exist.bin");
+        CHECK(lvglcj_image_set_src(im, path) == LVGLCJ_OK, "设置图像源（路径不存在）");
+        memset(path, 0x5A, sizeof(path)); /* 覆写调用方缓冲区 */
+
+        CHECK(lvglcj_image_set_offset(im, 3, -4) == LVGLCJ_OK, "设置偏移（含负值）");
+        CHECK(lvglcj_image_set_scale(im, 256) == LVGLCJ_OK, "缩放 256 = 100%");
+        CHECK(lvglcj_image_set_scale(im, 128) == LVGLCJ_OK, "缩放 128 = 50%");
+        CHECK(lvglcj_image_set_scale(im, 0) == LVGLCJ_ERR_INVALID_ARGUMENT,
+              "★ 缩放 0 被拒（0 不是无缩放——那是 256）");
+        CHECK(lvglcj_image_set_scale(im, -1) == LVGLCJ_ERR_INVALID_ARGUMENT,
+              "★ 缩放为负被拒（底层收 uint32_t，放行会变成巨大缩放值）");
+
+        int64_t holder = lvglcj_obj_create(scr);
+        int64_t im2 = lvglcj_image_create(holder);
+        CHECK(lvglcj_image_set_src(im2, "A:/x.bin") == LVGLCJ_OK, "挂到父对象上的 image");
+        CHECK(lvglcj_obj_delete(holder) == LVGLCJ_OK, "删除父对象");
+        CHECK(lvglcj_handle_state(im2) == LVGLCJ_HSTATE_INVALIDATED, "★ image 句柄级联失效");
+
+        /* 删除自身：LVGL 会释放它自己 dup 的那份路径字符串（它的账，但它必须不泄漏） */
+        CHECK(lvglcj_obj_delete(im) == LVGLCJ_OK, "删除 image");
+        CHECK(lvglcj_handle_state(im) != LVGLCJ_HSTATE_ALIVE, "删除后不再报告 ALIVE");
+    }
+
     /* ================================================== 8. 清理顺序 */
     printf("\n-- 8. 清理 --\n");
     /*

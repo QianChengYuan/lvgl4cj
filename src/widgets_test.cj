@@ -334,6 +334,46 @@ class WidgetTests {
         rt.deinitLvgl()
     }
 
+    // ==================================================== 十、P1 批次 5：image
+
+    /*
+     * image 的契约要点不在"能显示图片"（那需要真实文件与解码器，属端到端场景），
+     * 而在三件容易想当然的事：
+     *   · 路径被 LVGL **拷贝** —— 所以传临时构造的 String 是安全的；
+     *   · 路径不存在**不抛异常** —— 这是 LVGL 的既定行为，本层如实透传；
+     *     不写清楚，它在界面上表现为"设了 src 却一片空白"；
+     *   · 缩放单位是 **256 = 100%**，不是百分比。
+     */
+    @TestCase
+    func testImageSrcCopySemanticsAndScaleUnit(): Unit {
+        let rt = LvglRuntime()
+        let _ = rt.startHeadless(320, 240)
+        let im = LvImage.create(LvObject.screenActive())
+
+        /* 传一个临时构造的 String：安全的前提是 LVGL 会拷贝（本用例正是在钉这一点） */
+        im.setSrc("A:/does/not/exist.bin")
+        /* 路径不存在不抛异常 —— 这是既定行为而不是遗漏 */
+        im.setSrc("A:/also/missing.png")
+
+        im.setOffset(3, -4)
+        im.setScale(256) /* 256 = 100% */
+        im.setScale(128) /* 一半 */
+
+        /* 非法缩放必须被拦：0 不是"无缩放"（那是 256），负值会被底层当 uint32 用 */
+        @Assert(throwsLvgl({=> im.setScale(0) }), true)
+        @Assert(throwsLvgl({=> im.setScale(-1) }), true)
+
+        /* 失效句柄上操作必须抛错 */
+        let holder = LvObject.create(LvObject.screenActive())
+        let im2 = LvImage.create(holder)
+        im2.setSrc("A:/x.bin")
+        holder.close()
+        @Assert(throwsLvgl({=> im2.setSrc("A:/y.bin") }), true)
+
+        im.close()
+        rt.deinitLvgl()
+    }
+
     // ==================================================== 六、Canvas（§3.11.2）
 
     /*

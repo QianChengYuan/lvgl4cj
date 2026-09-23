@@ -620,6 +620,40 @@ int32_t lvglcj_line_set_points(int64_t line, const int32_t *xy, int32_t point_co
 /* y 轴反向（非 0 = 反向）。LVGL 的默认坐标系向下增长，画折线图时常需要翻转 */
 int32_t lvglcj_line_set_y_invert(int64_t line, int32_t on);
 
+/* ============================================ 控件（P1 批次 5：image）
+ *
+ * ★ 所有权：**LVGL 会拷贝路径字符串**。这是读实现确认的，不是推测：
+ *     lv_image_set_src 对 FILE/SYMBOL 类型执行 lv_strdup(src)，
+ *     并把旧的源用 lv_free 释放（即所有权归它）。
+ *   因此本 ABI 收的 const char* 在调用返回后即可释放 —— 与 dropdown/label 同类，
+ *   而不是 canvas/line 那种"LVGL 只存指针、由我们持有"的类型。
+ *
+ * ★★ 契约里**不提供**图像描述符（lv_image_dsc_t*）这一形态。原因：
+ *   LVGL 对 LV_IMAGE_SRC_VARIABLE 是 `img->src = src` —— **只存指针、不拷贝**，
+ *   那会变成又一类"由我们持有"的所有权问题（第三例），且描述符的内存布局还要
+ *   一并冻结进契约。本批只做文件路径形态，把描述符留到有明确需求时单独设计。
+ *   （与 dropdown 不提供 set_options_static 是同一种取舍：不给会制造悬空的入口。）
+ *
+ * ★ 已知的静默失败（如实写在契约里）：**路径不存在时 LVGL 不报错**，
+ *   只是不显示图像（它自己打一行日志）。本层无法在不额外付出代价的情况下
+ *   提前发现（POSIX 驱动没有 exists 接口），所以调用方若要判定"到底加载上没有"，
+ *   需自行确认文件存在。不把这件事写清楚，它会表现为"设了 src 但界面空白"。
+ */
+int64_t lvglcj_image_create(int64_t parent);
+
+/* 设置图像源（文件路径）。
+ * path == NULL 表示**清空图像** —— 这是合法操作而非错误：
+ * 图像没有"空字符串"这种表达方式，NULL 是表达"没有图像"的唯一途径。
+ * （注意这与 label/checkbox/dropdown 的文本 setter 相反，那里 NULL 是错误。） */
+int32_t lvglcj_image_set_src(int64_t img, const char *path);
+
+/* 偏移（像素） */
+int32_t lvglcj_image_set_offset(int64_t img, int32_t x, int32_t y);
+
+/* 缩放。★ 单位不是百分比：**256 = 100%**，128 = 一半，512 = 两倍。
+ * 传 100 会得到约 39% —— 这是 LVGL 的既有约定，此处如实透传并显式校验 0。 */
+int32_t lvglcj_image_set_scale(int64_t img, int32_t zoom);
+
 /* ============================================================ §3.11.2 Canvas */
 int64_t lvglcj_canvas_create(int64_t parent);
 int32_t lvglcj_canvas_set_buffer(int64_t canvas, int32_t w, int32_t h);
