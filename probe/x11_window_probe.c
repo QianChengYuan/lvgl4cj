@@ -87,6 +87,8 @@ static unsigned int chan_of(unsigned long p, unsigned long mask)
 extern int XTestFakeButtonEvent(Display *dpy, unsigned int button, int is_press,
                                 unsigned long delay);
 extern int XTestFakeMotionEvent(Display *dpy, int screen, int x, int y, unsigned long delay);
+extern int XTestFakeKeyEvent(Display *dpy, unsigned int keycode, int is_press,
+                             unsigned long delay);
 
 int main(int argc, char **argv)
 {
@@ -143,6 +145,24 @@ int main(int argc, char **argv)
                wait_ms);
         if (wait_ms > 0) {
             usleep(wait_ms * 1000);
+        }
+    }
+
+    /*
+     * 可选：注入一次按键（argv[4] = X keysym，例如 0x73 = 's'）。
+     * 用于端到端验证"按键 -> 应用动作"这条链（例如示例的存图快捷键）。
+     */
+    if (argc >= 5) {
+        unsigned int ks = (unsigned int)strtoul(argv[4], NULL, 0);
+        KeyCode kc = XKeysymToKeycode(d, (KeySym)ks);
+        if (kc != 0) {
+            XTestFakeKeyEvent(d, (unsigned int)kc, 1, 0);
+            XTestFakeKeyEvent(d, (unsigned int)kc, 0, 0);
+            XFlush(d);
+            printf("已注入按键 keysym=0x%x（keycode=%u）\n", ks, (unsigned int)kc);
+            usleep(300 * 1000);
+        } else {
+            printf("keysym=0x%x 没有对应 keycode，未注入\n", ks);
         }
     }
 

@@ -120,6 +120,18 @@ public class Sdl2Backend {
         unsafe { lvglcj_sdl2_take_wheel_steps() }
     }
 
+    /**
+     * 取走最近一次按下的键（SDL keysym，如 `'s'` 就是 `0x73`）；没有则返回 `0`。
+     *
+     * ★ 它补的是一个**半接线的缺口**：后端一直在收集按键，但此前没有读出入口，
+     *   而示例只建了 pointer indev —— 于是键盘在应用侧完全不可见。
+     * 语义：只记**按下**、只保留**最近一次**、取走即清零（与 `takeWheelSteps` 一致）。
+     * 要走 LVGL 的键位导航（keypad/encoder），请用 `LvGroup` + `LvIndev` 那条路。
+     */
+    public func takeKey(): UInt32 {
+        unsafe { lvglcj_sdl2_take_key() }
+    }
+
     /// 窗口是否已关闭/最小化（此时后端暂停渲染并立即放行等待方）
     public func isPaused(): Bool {
         unsafe { lvglcj_sdl2_is_paused() } != 0

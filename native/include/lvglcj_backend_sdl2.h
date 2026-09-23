@@ -74,6 +74,18 @@ int32_t lvglcj_sdl2_take_wheel_steps(void);
 /* 测试注入：绕过 SDL 直接塞入滚轮格数（与 set_render_suppressed 同类的钩子）。 */
 int32_t lvglcj_sdl2_inject_wheel(int32_t steps);
 
+/* 取走最近一次**按下**的键（SDL keysym，如 's' 就是 0x73）；没有则返回 0。取走后清零。
+ *
+ * ★ 补的是一个**半接线的缺口**：后端一直在收集按键（g_in_key / g_in_key_pressed），
+ *   但此前没有任何读出入口 —— 而示例只建了 pointer indev，于是"键盘按下去"这件事
+ *   在应用侧完全不可见（不是没实现，是接了一半）。
+ * ★ 语义：只记**按下**（快捷键不关心抬起），只保留**最近一次**（快速连按只处理最后一击，
+ *   这对"存图/切模式"这类动作是想要的语义 —— 攒一串旧按键反而会在之后被误触发）。
+ * ★ 取走是破坏性的（与 take_wheel_steps 一致）：调用方拿走即由它负责处理；
+ *   要让 LVGL 的 keypad indev 收到按键，仍走 lvglcj_indev_set_key 那条路，不经过本入口。
+ */
+uint32_t lvglcj_sdl2_take_key(void);
+
 /* ============================================ 截图（设计文档 §7.3 的 LvDebug.screenshot）
  *
  * 把**当前显示的那一帧**写成 P6 PPM（`path` 为文件名）。

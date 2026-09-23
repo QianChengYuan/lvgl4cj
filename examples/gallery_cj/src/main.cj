@@ -498,7 +498,7 @@ main(args: Array<String>) {
     /* 启动 C 侧主循环线程；此后主线程只负责 SDL 事件循环 */
     rt.startThreaded()
 
-    println("[gallery_cj] 窗口已启动：19 个控件分 11 张卡片；滚轮或按住鼠标拖动均可滚动")
+    println("[gallery_cj] 窗口已启动：19 个控件分 11 张卡片；滚轮或按住鼠标拖动均可滚动；按 s 存一张截图")
     /*
      * ★ 先把噪音解释掉，免得它看起来像故障：
      *   「font A/B」那张卡片的**上行是故意用内置 CJK 字体**画的，
@@ -531,6 +531,31 @@ main(args: Array<String>) {
     while (!backend.pollEvents()) {
         sleep(Duration.millisecond * 2)
         rounds++
+
+        /*
+         * ★ 全局快捷键：按 s 存一张截图（设计文档 §7.3 的 LvDebug.screenshot）。
+         *
+         *   键盘此前在后端里**只被收集、没有读出入口** —— 应用级快捷键一直做不了。
+         *   现在由 backend.takeKey() 取走（只记按下、取走即清零、只保留最近一次）。
+         *
+         *   放在主循环里只是因为"快捷键归主循环处理"；截图本身**与线程无关** ——
+         *   后端维护一份整帧 CPU 副本，截图只做纯 CPU 转换与写文件，任意线程可调。
+         *
+         *   ★ 这里原写的是"主循环就是渲染线程，截图会内联完成"——**实测证明那是错的**：
+         *     诊断输出「注册的渲染线程 tid=113572，当前 tid=113584（不同线程）」，
+         *     仓颉的 M:N 线程模型会让主线程跨 OS 线程迁移（循环里每 2ms 一次 sleep），
+         *     于是"调用线程 == 注册线程"的比对失效 → 请求被投递、等待必然超时，
+         *     表现为"报失败，但文件随后被下一轮 poll 写了出来"。现已改为整帧副本方案。
+         *   存图失败只打印，不让它把示例带崩（快捷键是便利功能，不是主路径）。
+         */
+        if (backend.takeKey() == 0x73) { /* SDL keysym：'s' */
+            try {
+                LvDebug.screenshot("gallery_shot.ppm")
+                println("[gallery_cj] 已存截图：gallery_shot.ppm（当前工作目录）")
+            } catch (e: LvglException) {
+                println("[gallery_cj] 存图失败：${e}")
+            }
+        }
 
         /* 每秒一次：在 LVGL 线程上采样 + 推进图表数据 */
         let nowUs = monotonicUs()

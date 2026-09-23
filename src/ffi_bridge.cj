@@ -269,6 +269,10 @@ foreign func lvglcj_sdl2_stale_apply_count(): Int32
  * ★ 滚轮不走 indev：LVGL 的 encoder 在导航模式下只移动焦点，不滚动视图。 */
 foreign func lvglcj_sdl2_take_wheel_steps(): Int32
 
+/* 取走最近一次按下的键（SDL keysym，如 's' = 0x73）；无则 0。
+ * ★ 补的是半接线缺口：后端一直在收集按键，但此前没有读出入口，应用侧看不到键盘。 */
+foreign func lvglcj_sdl2_take_key(): UInt32
+
 /* SDL2 后端：把**当前显示的那一帧**写成 P6 PPM（设计文档 §7.3 的可观测性 API）。
  * ★ null 后端也有同形 stub（返回 NOT_SUPPORTED）：可观测性层在两种后端下都要能链接，
  *   而且"不支持"必须由后端**说出来**，不能让调用方拿到链接错误或一张猜出来的空白图。 */
