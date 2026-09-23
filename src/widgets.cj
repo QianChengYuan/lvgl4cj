@@ -439,6 +439,85 @@ public class LvLed <: LvObject {
     }
 }
 
+/*
+ * ===================== P1 批次 3：dropdown（§7.1）=====================
+ * 这一批引入**新的值类型**：dropdown 带来的是「字符串列表」。
+ * 它是三类新值类型里所有权最轻的一类，因为 LVGL **会拷贝**选项字符串 ——
+ * 所以 L1 可以直接收 String，不必要求调用方长期持有。
+ * （这一点是核对过 LVGL 文档的，不是推测：set_options 的注释明写
+ *  "The options will be copied ... the options can be destroyed after calling"。）
+ */
+
+/// 下拉选择列表
+public class LvDropdown <: LvObject {
+    private init(h: Int64) {
+        super(h)
+    }
+
+    /**
+     * 创建一个 dropdown。
+     *
+     * @throws[LvglException] 同 LvSwitch.create
+     */
+    public static func create(parent: LvObject): LvDropdown {
+        ensureLvglOwnership()
+        let h = unsafe { lvglcj_dropdown_create(parent.handle) }
+        if (h <= 0) {
+            throw LvglException(OutOfMemory, "dropdown 创建失败（LVGL 内存池已满，或未启动显示导致没有默认屏幕）")
+        }
+        return LvDropdown(h)
+    }
+
+    /**
+     * 设置选项。
+     *
+     * ★ **多项之间用 `\n` 分隔**（这是 LVGL 的原生形态，如 `"一\n二\n三"`）。
+     *   之所以沿用这个形态而不是收一个数组：LVGL 的内部表示就是这个字符串，
+     *   在这里拆成数组、到 C 侧再拼回去，只会多一次拷贝而没有任何收益。
+     *   需要从 `Array<String>` 构造时，调用方自行用 `\n` 连接即可。
+     *
+     * 选项字符串会被 LVGL 拷贝一份，因此传入的 String 生命周期不受约束。
+     */
+    public func setOptions(text: String): LvDropdown {
+        throwIfError(withCString(text) {cs => unsafe { lvglcj_dropdown_set_options(handle, cs) }}, "dropdown.setOptions")
+        return this
+    }
+
+    /**
+     * 选中第 idx 项（0 起）。
+     *
+     * @throws[LvglException] InvalidArgument —— idx 为负
+     *         （底层收 uint32_t，放行会被隐式转成一个巨大的索引）
+     */
+    public func setSelected(idx: Int32): LvDropdown {
+        throwIfError(unsafe { lvglcj_dropdown_set_selected(handle, idx) }, "dropdown.setSelected")
+        return this
+    }
+
+    /**
+     * 当前选中项索引。
+     *
+     * ★ 只判负值：索引本身非负（0 是合法答案），所以不需要出参形式 ——
+     *   这与 `LvBar.value()` 必须用出参并不矛盾，判据都是**值域是否与错误码重叠**。
+     */
+    public func selected(): Int32 {
+        let r = unsafe { lvglcj_dropdown_get_selected(handle) }
+        if (r < 0) {
+            throwIfError(r, "dropdown.selected")
+        }
+        return r
+    }
+
+    /// 选项个数（同样：非负、负数是错误）
+    public func optionCount(): Int32 {
+        let r = unsafe { lvglcj_dropdown_get_option_count(handle) }
+        if (r < 0) {
+            throwIfError(r, "dropdown.optionCount")
+        }
+        return r
+    }
+}
+
 /// 忙碌指示器
 public class LvSpinner <: LvObject {
     private init(h: Int64) {

@@ -256,6 +256,46 @@ class WidgetTests {
         return o.isAlive
     }
 
+    // ==================================================== 八、P1 批次 3：dropdown
+
+    /*
+     * dropdown 引入新的值类型（字符串列表）。这里在 L1 层验证两件事：
+     *   · 选项用 '\n' 分隔这一形态在 L1 是**如实透传**的（不偷偷改语义）；
+     *   · 选中的索引读回 **0 不是错误** —— 这条正是 get_* 不必用出参的前提，
+     *     也是它与 LvBar.value() 形式不同的原因（值域是否与错误码重叠）。
+     */
+    @TestCase
+    func testDropdownOptionsAndSelection(): Unit {
+        let rt = LvglRuntime()
+        let _ = rt.startHeadless(320, 240)
+        let dd = LvDropdown.create(LvObject.screenActive())
+
+        dd.setOptions("一\n二\n三")
+        @Assert(dd.optionCount(), 3)
+        /* ★ 默认选中第 0 项：0 是合法答案，不应被当成错误 */
+        @Assert(dd.selected(), 0)
+        dd.setSelected(2)
+        @Assert(dd.selected(), 2)
+
+        /* 选项个数随重新设置而变 */
+        dd.setOptions("a\nb")
+        @Assert(dd.optionCount(), 2)
+
+        /* 负索引必须抛错（底层收 uint32_t，放行会变成巨大索引） */
+        @Assert(throwsLvgl({=> dd.setSelected(-1) }), true)
+
+        /* 失效句柄上取值必须抛错，而不是返回 0 装作"选中第 0 项" */
+        let holder = LvObject.create(LvObject.screenActive())
+        let dd2 = LvDropdown.create(holder)
+        dd2.setOptions("x\ny")
+        holder.close()
+        @Assert(throwsLvgl({=> dd2.selected() }), true)
+        @Assert(throwsLvgl({=> dd2.optionCount() }), true)
+
+        dd.close()
+        rt.deinitLvgl()
+    }
+
     // ==================================================== 六、Canvas（§3.11.2）
 
     /*

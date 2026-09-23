@@ -410,6 +410,27 @@ foreign func lvglcj_led_set_on(led: Int64, on: Int32): Int32
 
 foreign func lvglcj_spinner_create(parent: Int64): Int64
 
+/* ---------------- P1 批次 3：dropdown（§7.1）----------------
+ *
+ * ★ 只提供**会拷贝**选项字符串的形态。LVGL 另有一个 set_options_static（不拷贝），
+ *   它要求那块内存一直有效，而仓颉侧传来的 CString 在调用返回后即被释放 ——
+ *   用它就是立刻制造悬空指针。契约里不存在那个入口，这里也就不可能选错。
+ *
+ * ★ get_selected / get_option_count 直接返回数值、**负数是错误**：
+ *   索引与个数都是非负的，不与错误码的负值域重叠。
+ *   这与 bar/slider/arc 必须用出参的决定看似矛盾，规则其实是同一条：
+ *   **值域是否与错误码重叠**。
+ */
+foreign func lvglcj_dropdown_create(parent: Int64): Int64
+
+foreign func lvglcj_dropdown_set_options(dd: Int64, options: CString): Int32
+
+foreign func lvglcj_dropdown_set_selected(dd: Int64, idx: Int32): Int32
+
+foreign func lvglcj_dropdown_get_selected(dd: Int64): Int32
+
+foreign func lvglcj_dropdown_get_option_count(dd: Int64): Int32
+
 /* ---------------- Canvas（§3.11.2）：自定义绘制的唯一出口 ----------------
  *
  * ★ 颜色参数的**解释方式在不同函数上不同**，调用方必须看清：

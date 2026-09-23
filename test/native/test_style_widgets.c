@@ -392,6 +392,46 @@ int main(void)
         CHECK(lvglcj_handle_state(sp) == LVGLCJ_HSTATE_INVALIDATED, "★ spinner 句柄级联失效");
     }
 
+    /* ================================================== 7e. P1 批次 3：dropdown
+     *
+     * 这一批引入新的值类型（字符串列表），所以重点是：
+     *   · 选项字符串**确实被拷贝** —— 调用方（L1）传的是临时 CString，
+     *     返回后即释放；若误用 set_options_static 而没拷贝，这里会读到已释放内存，
+     *     ASan 下必报。也就是说这条断言同时钉住了"拷贝语义"这个契约。
+     *   · 索引/个数与错误码不重叠，所以 get_* 直接返回数值而不是出参。
+     */
+    printf("\n-- 7e. P1 批次 3 控件（dropdown）--\n");
+    {
+        int64_t dd = lvglcj_dropdown_create(scr);
+        CHECK(dd != 0, "创建 dropdown");
+
+        CHECK(lvglcj_dropdown_set_options(dd, "one\ntwo\nthree") == LVGLCJ_OK, "设置 3 个选项");
+        CHECK(lvglcj_dropdown_get_option_count(dd) == 3, "★ 选项个数读回 3（含拷贝语义）");
+        /* 默认选中第 0 项：0 是合法答案，不是错误 —— 这正是 get_* 能直接返回值的前提 */
+        CHECK(lvglcj_dropdown_get_selected(dd) == 0, "默认选中第 0 项（0 是答案不是错误）");
+        CHECK(lvglcj_dropdown_set_selected(dd, 2) == LVGLCJ_OK, "选中第 2 项");
+        CHECK(lvglcj_dropdown_get_selected(dd) == 2, "读回第 2 项");
+
+        /* 重新设置选项：LVGL 会替换掉旧的（旧字符串由它自己释放） */
+        CHECK(lvglcj_dropdown_set_options(dd, "a\nb") == LVGLCJ_OK, "改为 2 个选项");
+        CHECK(lvglcj_dropdown_get_option_count(dd) == 2, "个数变成 2");
+
+        CHECK(lvglcj_dropdown_set_options(dd, NULL) == LVGLCJ_ERR_INVALID_ARGUMENT,
+              "选项字符串为 NULL 被拒");
+        CHECK(lvglcj_dropdown_set_selected(dd, -1) == LVGLCJ_ERR_INVALID_ARGUMENT,
+              "★ 负索引被拒（底层收 uint32_t，放行会变成巨大索引）");
+
+        int64_t holder = lvglcj_obj_create(scr);
+        int64_t dd2 = lvglcj_dropdown_create(holder);
+        CHECK(lvglcj_dropdown_set_options(dd2, "x\ny\nz") == LVGLCJ_OK, "挂到父对象上的 dropdown");
+        CHECK(lvglcj_obj_delete(holder) == LVGLCJ_OK, "删除父对象");
+        CHECK(lvglcj_handle_state(dd2) == LVGLCJ_HSTATE_INVALIDATED, "★ dropdown 句柄级联失效");
+        CHECK(lvglcj_dropdown_get_selected(dd2) < 0,
+              "对已失效的 dropdown 取选中项：返回负错误码而非崩溃");
+
+        CHECK(lvglcj_obj_delete(dd) == LVGLCJ_OK, "删除 dropdown");
+    }
+
     /* ================================================== 8. 清理顺序 */
     printf("\n-- 8. 清理 --\n");
     /*

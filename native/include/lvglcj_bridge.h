@@ -557,6 +557,41 @@ int32_t lvglcj_led_set_on(int64_t led, int32_t on);
 /* spinner：忙碌指示。**无属性、无配置** —— 旋转由 LVGL 内部动画驱动 */
 int64_t lvglcj_spinner_create(int64_t parent);
 
+/* ============================================ 控件（P1 批次 3：dropdown）
+ *
+ * 这一批开始引入**新的值类型**（不再是"值/勾选"这种标量），dropdown 引入的是
+ * **字符串列表** —— 也是三类新值类型里所有权最轻的一类，因为 LVGL 会**拷贝**它。
+ *
+ * ★★ 一个必须写下来的陷阱：LVGL 有一对语义相反的接口
+ *      lv_dropdown_set_options()        —— **会拷贝**字符串（文档明说调用后可销毁传参）
+ *      lv_dropdown_set_options_static() —— **不拷贝**，要求该内存一直有效
+ *    我们只暴露**前者**。用后者配仓颉侧临时构造的 CString 会立刻变成悬空指针：
+ *    调用返回即 free，而 LVGL 仍持有那个地址。这类错误不会当场报错，
+ *    而是在某次重绘时读到已回收的内存 —— 所以这里连入口都不提供。
+ *    （与 lv_label_set_text / lv_checkbox_set_text 同一取舍：只收"会被拷贝"的形态。）
+ *
+ * ★ 「取状态」的返回值形式在这里**又变了一次**，判据仍是同一条：
+ *     dropdown 的索引与选项数都是**非负**的，不与错误码的负值域重叠，
+ *     所以可以像 font_has_glyph 那样直接返回（0 是合法答案、负数是错误）。
+ *     而 bar/slider/arc 的 get_value 必须用出参 —— 因为它们的值域可为负。
+ *     同一个"取状态"问题在不同控件上得出不同结论，规则是同一条：
+ *     **值域是否与错误码重叠**。
+ */
+int64_t lvglcj_dropdown_create(int64_t parent);
+
+/* options 是 **'\n' 分隔** 的字符串（LVGL 的原生形态），例如 "一\n二\n三"。
+ * LVGL 会拷贝一份，因此传入的 CString 调用返回后即可释放。 */
+int32_t lvglcj_dropdown_set_options(int64_t dd, const char *options);
+
+/* 选中项索引（0 起）。负数明确拒绝 —— 底层收 uint32_t，放行会被隐式转成大整数 */
+int32_t lvglcj_dropdown_set_selected(int64_t dd, int32_t idx);
+
+/* 当前选中项索引；**负数是错误码**（索引本身非负，不会撞车，见上面的说明） */
+int32_t lvglcj_dropdown_get_selected(int64_t dd);
+
+/* 选项个数；同样负数是错误码 */
+int32_t lvglcj_dropdown_get_option_count(int64_t dd);
+
 /* ============================================================ §3.11.2 Canvas */
 int64_t lvglcj_canvas_create(int64_t parent);
 int32_t lvglcj_canvas_set_buffer(int64_t canvas, int32_t w, int32_t h);

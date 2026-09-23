@@ -531,3 +531,61 @@ int64_t lvglcj_spinner_create(int64_t parent)
     /* 无属性可设：旋转由 LVGL 内部的弧动画自行驱动，不经过本层 */
     return widget_create_common(parent, __func__, lv_spinner_create, "lv_spinner_t");
 }
+
+/* ------------------------------------------------------------ dropdown */
+
+int64_t lvglcj_dropdown_create(int64_t parent)
+{
+    return widget_create_common(parent, __func__, lv_dropdown_create, "lv_dropdown_t");
+}
+
+int32_t lvglcj_dropdown_set_options(int64_t dd, const char *options)
+{
+    LVGLCJ_HANDLE_GUARD(dd, __func__);
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    if (options == NULL) {
+        lvglcj_record_error(LVGLCJ_ERR_INVALID_ARGUMENT, dd, 0, __func__,
+                            "选项字符串为 NULL");
+        return LVGLCJ_ERR_INVALID_ARGUMENT;
+    }
+    /*
+     * ★ 只用 set_options（会拷贝），**绝不用 set_options_static**。
+     *   后者要求这块内存一直有效，而仓颉侧传进来的 CString 在调用返回后即被释放
+     *   —— 换成 static 版本就是立刻制造一个悬空指针，且不会当场报错。
+     *   契约里没有提供那个入口，这里也就不存在"选错"的可能。
+     */
+    lv_dropdown_set_options((lv_obj_t *)lvglcj_ptr_of(dd), options);
+    return LVGLCJ_OK;
+}
+
+int32_t lvglcj_dropdown_set_selected(int64_t dd, int32_t idx)
+{
+    LVGLCJ_HANDLE_GUARD(dd, __func__);
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    /* 底层收 uint32_t：负数会被隐式转成一个巨大的索引 */
+    if (idx < 0) {
+        lvglcj_record_error(LVGLCJ_ERR_INVALID_ARGUMENT, dd, idx, __func__,
+                            "选中项索引不能为负（底层收 uint32_t，放行会变成大整数）");
+        return LVGLCJ_ERR_INVALID_ARGUMENT;
+    }
+    lv_dropdown_set_selected((lv_obj_t *)lvglcj_ptr_of(dd), (uint32_t)idx);
+    return LVGLCJ_OK;
+}
+
+int32_t lvglcj_dropdown_get_selected(int64_t dd)
+{
+    LVGLCJ_HANDLE_GUARD(dd, __func__);
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    return (int32_t)lv_dropdown_get_selected((lv_obj_t *)lvglcj_ptr_of(dd));
+}
+
+int32_t lvglcj_dropdown_get_option_count(int64_t dd)
+{
+    LVGLCJ_HANDLE_GUARD(dd, __func__);
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    return (int32_t)lv_dropdown_get_option_count((lv_obj_t *)lvglcj_ptr_of(dd));
+}
