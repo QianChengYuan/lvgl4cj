@@ -175,6 +175,21 @@ int32_t lvglcj_queue_capacity(void);
 /* which: 0=accepted 1=rejected 2=executed 3=dropped；其它返回 -1 */
 int64_t lvglcj_queue_stat(int32_t which);
 
+/* ==================== 控件创建的共用步骤（widgets.c / canvas.c 共用）====================
+ *
+ * 抽出来的理由不是少写几行，而是**去掉多份拷贝各自漂移的可能**：
+ * 「创建 → 登记 → 挂 DELETE 钩子」这段流程一旦某处漏掉挂钩子，
+ * 就会产生悬空句柄（isAlive 为 true 而底层对象已消失，即 §3.3 要防的那种）。
+ * widgets.c 与 canvas.c 现在共用这两个函数，因此不会出现
+ * "一处记得挂、另一处忘了"。
+ *
+ * 另外 lvglcj_widget_parent_of 用「错误码 + 出参」而不是"直接返回指针"，
+ * 是因为 parent == 0 是**合法输入**（表示挂到当前屏幕），解析结果也是 NULL ——
+ * 与"父句柄无效"的 NULL 无法区分，混成一个会让"传错句柄"被静默当成"挂到屏幕上"。
+ */
+int32_t lvglcj_widget_parent_of(int64_t parent, const char *fn_name, lv_obj_t **out);
+int64_t lvglcj_widget_register_created(lv_obj_t *obj, const char *type_name);
+
 /* ============================ 后端 sink 钩子（display.c） */
 /*
  * 为什么需要它：后端（SDL2）必须在 flush 时拿到「本次刷新的区域 + 像素指针」

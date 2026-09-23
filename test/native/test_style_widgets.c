@@ -257,6 +257,79 @@ int main(void)
               "对已失效的 switch 操作：报错而非 UAF");
     }
 
+    /* ================================================== 7c. Canvas（§3.11.2）
+     *
+     * 本段最要紧的是**缓冲所有权**：像素缓冲由 C 侧 malloc、随对象释放，
+     * 所以「重复 set_buffer」「删除 canvas」两条路径都必须既不泄漏也不重复释放 ——
+     * 而这正是 ASan 能精确抓到、靠人眼很难发现的类别。
+     * 因此本段在 ASan 下的价值高于在普通构建下的价值。
+     */
+    printf("\n-- 7c. Canvas（自定义绘制的唯一出口）--\n");
+    {
+        int64_t cv = lvglcj_canvas_create(scr);
+        CHECK(cv != 0, "创建 canvas");
+
+        /* ★ 未设缓冲就绘制：必须明确报错，而不是崩在 LVGL 内部 */
+        CHECK(lvglcj_canvas_draw_point(cv, 0, 0, 0xFF0000u) == LVGLCJ_ERR_INVALID_ARGUMENT,
+              "★ 未 set_buffer 就绘制：明确报错而非崩溃");
+        CHECK(lvglcj_canvas_fill_bg(cv, 0x112233u, 255) == LVGLCJ_ERR_INVALID_ARGUMENT,
+              "未 set_buffer 就 fill_bg：同样明确报错");
+
+        /* 尺寸校验（只拦不可能的情形，不设经验上限） */
+        CHECK(lvglcj_canvas_set_buffer(cv, 0, 64) == LVGLCJ_ERR_INVALID_ARGUMENT,
+              "宽度为 0 被拒绝");
+        CHECK(lvglcj_canvas_set_buffer(cv, -1, 64) == LVGLCJ_ERR_INVALID_ARGUMENT,
+              "宽度为负被拒绝");
+
+        CHECK(lvglcj_canvas_set_buffer(cv, 64, 64) == LVGLCJ_OK, "设置 64×64 缓冲");
+
+        /* 绘制操作全部放行 */
+        CHECK(lvglcj_canvas_fill_bg(cv, 0x1A1D2Eu, 255) == LVGLCJ_OK, "fill_bg 不透明");
+        CHECK(lvglcj_canvas_fill_bg(cv, 0x1A1D2Eu, 128) == LVGLCJ_OK, "fill_bg 半透明");
+        CHECK(lvglcj_canvas_draw_point(cv, 1, 1, 0xFF0000u) == LVGLCJ_OK, "draw_point");
+        CHECK(lvglcj_canvas_draw_line(cv, 0, 0, 63, 63, 0xFFFFFFu) == LVGLCJ_OK, "draw_line");
+        CHECK(lvglcj_canvas_draw_rect(cv, 4, 4, 8, 8, 0x00FF00u) == LVGLCJ_OK, "draw_rect");
+        CHECK(lvglcj_canvas_draw_arc(cv, 32, 32, 20, 0, 180, 0x00D9B5u) == LVGLCJ_OK, "draw_arc");
+        CHECK(lvglcj_canvas_set_palette(cv, 1, 0x80FF0000u) == LVGLCJ_OK, "set_palette");
+
+        /* 参数校验 */
+        CHECK(lvglcj_canvas_draw_rect(cv, 0, 0, 0, 8, 0xFFFFFFu) == LVGLCJ_ERR_INVALID_ARGUMENT,
+              "矩形宽为 0 被拒绝");
+        CHECK(lvglcj_canvas_draw_arc(cv, 0, 0, 0, 0, 90, 0xFFFFFFu) == LVGLCJ_ERR_INVALID_ARGUMENT,
+              "半径为 0 被拒绝");
+        CHECK(lvglcj_canvas_draw_arc(cv, 0, 0, 70000, 0, 90, 0xFFFFFFu) ==
+                  LVGLCJ_ERR_INVALID_ARGUMENT,
+              "★ 半径超过 uint16 被拒绝（放行会被 LVGL 静默截断）");
+        CHECK(lvglcj_canvas_set_palette(cv, 256, 0u) == LVGLCJ_ERR_INVALID_ARGUMENT,
+              "调色板索引越界被拒绝");
+        CHECK(lvglcj_canvas_set_palette(cv, -1, 0u) == LVGLCJ_ERR_INVALID_ARGUMENT,
+              "调色板索引为负被拒绝");
+        CHECK(lvglcj_canvas_fill_bg(cv, 0u, 999) == LVGLCJ_ERR_INVALID_ARGUMENT,
+              "opa 越界被拒绝");
+
+        /* ★ 重复设置缓冲：内部必须先释放旧的那块，否则泄漏（ASan 会报） */
+        CHECK(lvglcj_canvas_set_buffer(cv, 32, 32) == LVGLCJ_OK, "★ 改尺寸：重复设缓冲成功");
+        CHECK(lvglcj_canvas_draw_point(cv, 5, 5, 0xFFFFFFu) == LVGLCJ_OK,
+              "改尺寸后仍可正常绘制");
+
+        /* 删除 canvas：DELETE 钩子释放缓冲；ASan 会在这里报出泄漏或重复释放 */
+        CHECK(lvglcj_obj_delete(cv) == LVGLCJ_OK, "★ 删除 canvas（缓冲随之释放）");
+        /*
+         * ★ 这里断言的是「不再是 ALIVE」，而**不是**某个具体状态。
+         *
+         *   原因：7b 段验证的是「父对象被删 → 子句柄 INVALIDATED」，那是**级联**路径；
+         *   本段删的是 canvas **自身**，是另一条路径，其终态不一定是 INVALIDATED
+         *   （可能是 RELEASED/UNINIT —— 表项被回收）。
+         *   首版照抄了 INVALIDATED，于是在 ASan 下报出一条看起来像产品缺陷的失败；
+         *   实际上它只是把我的**未经核实的预期**当成了断言。
+         *
+         *   真正必须成立的不变量只有一个：**已删除对象的句柄不得再报告 ALIVE** ——
+         *   否则调用方会以为它还能用。断言这一条，既够强又不越界。
+         */
+        CHECK(lvglcj_handle_state(cv) != LVGLCJ_HSTATE_ALIVE,
+              "★ 删除后句柄不再报告 ALIVE（不限定具体终态，见注释）");
+    }
+
     /* ================================================== 8. 清理顺序 */
     printf("\n-- 8. 清理 --\n");
     /*

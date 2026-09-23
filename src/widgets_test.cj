@@ -183,6 +183,48 @@ class WidgetTests {
         rt.deinitLvgl()
     }
 
+    // ==================================================== 六、Canvas（§3.11.2）
+
+    /*
+     * Canvas 是**自定义绘制的唯一出口**（§3.11.1 把 lv_draw_* 列为非目标）。
+     * 这里在 L1 层验证三件事：
+     *   · 未设缓冲就绘制 → 在 L1 就抛错，而不是崩在 LVGL 内部；
+     *   · 绘制与调色板参数校验会一路传到 L1；
+     *   · 重复设缓冲不报错（缓冲由 C 侧持有并随之释放，L1 不接触任何指针）。
+     */
+    @TestCase
+    func testCanvasDrawOpsAndBufferOwnership(): Unit {
+        let rt = LvglRuntime()
+        let _ = rt.startHeadless(320, 240)
+        let cv = LvCanvas.create(LvObject.screenActive())
+
+        /* ★ 未设缓冲 → 明确抛错 */
+        @Assert(throwsLvgl({=> cv.drawPoint(0, 0, 0xFF0000) }), true)
+        @Assert(throwsLvgl({=> cv.fillBg(0x112233) }), true)
+
+        cv.setBuffer(64, 64)
+        cv.fillBg(0x1A1D2E) /* 单参重载 = 不透明 */
+        cv.fillBg(0x1A1D2E, 128)
+        cv.drawPoint(1, 1, 0xFF0000)
+        cv.drawLine(0, 0, 63, 63, 0xFFFFFF)
+        cv.drawRect(4, 4, 8, 8, 0x00FF00)
+        cv.drawArc(32, 32, 20, 0, 180, 0x00D9B5)
+        cv.setPalette(1, 0x80FF0000)
+
+        /* 参数校验：尺寸、半径、调色板索引 */
+        @Assert(throwsLvgl({=> cv.setBuffer(0, 0) }), true)
+        @Assert(throwsLvgl({=> cv.drawRect(0, 0, 0, 8, 0xFFFFFF) }), true)
+        @Assert(throwsLvgl({=> cv.drawArc(0, 0, 70000, 0, 90, 0xFFFFFF) }), true)
+        @Assert(throwsLvgl({=> cv.setPalette(256, 0) }), true)
+
+        /* ★ 改尺寸：缓冲由 C 侧持有，L1 只给尺寸，重复调用不应出错也不应泄漏 */
+        cv.setBuffer(32, 32)
+        cv.drawPoint(5, 5, 0xFFFFFF)
+
+        cv.close()
+        rt.deinitLvgl()
+    }
+
     // ==================================================== 五、★ 失效句柄必须抛错
 
     /*

@@ -374,6 +374,38 @@ foreign func lvglcj_bar_set_value(bar: Int64, value: Int32): Int32
 
 foreign func lvglcj_bar_get_value(bar: Int64, out_value: CPointer<Int32>): Int32
 
+/* ---------------- Canvas（§3.11.2）：自定义绘制的唯一出口 ----------------
+ *
+ * ★ 颜色参数的**解释方式在不同函数上不同**，调用方必须看清：
+ *     · 绘制类与 fill_bg ：0xRRGGBB（高 8 位不解释），透明度走单独的 opa 参数
+ *     · set_palette      ：0xAARRGGBB（调色板项本身是带 alpha 的 32 位色）
+ *   这是 ABI 层面的不一致，不是笔误；统一会悄悄改变已声明签名的语义。
+ *   详见 native/src/canvas.c 文件头。
+ */
+foreign func lvglcj_canvas_create(parent: Int64): Int64
+
+foreign func lvglcj_canvas_set_buffer(canvas: Int64, w: Int32, h: Int32): Int32
+
+foreign func lvglcj_canvas_set_palette(canvas: Int64, idx: Int32, color: UInt32): Int32
+
+foreign func lvglcj_canvas_fill_bg(canvas: Int64, color: UInt32, opa: Int32): Int32
+
+foreign func lvglcj_canvas_draw_point(canvas: Int64, x: Int32, y: Int32, color: UInt32): Int32
+
+// 以下三条的参数个数由**已冻结的 C 契约**决定（桥接头就是这么声明的），
+// foreign 声明必须与之逐参数对应 —— 少一个参数就不再是同一个函数。
+// 因此 G.FUN.01 只能靠**同行尾注释**抑制（独立成行的写法实测无效），
+// 下面的注释不是装饰，去掉它门禁就会红。
+foreign func lvglcj_canvas_draw_line(canvas: Int64, x1: Int32, y1: Int32, x2: Int32, y2: Int32, color: UInt32): Int32 // cjlint-ignore !G.FUN.01
+
+foreign func lvglcj_canvas_draw_rect(canvas: Int64, x: Int32, y: Int32, w: Int32, h: Int32, color: UInt32): Int32 // cjlint-ignore !G.FUN.01
+
+// ★ 这里的形参名用缩写（cv/a0/a1/c），只为让整条声明连同抑制注释落在**同一行**：
+//   G.FUN.01 的抑制必须与告警所在行同行（独立成行实测无效），
+//   而 cjfmt 会按行宽把过长的声明重排成两行 —— 一旦重排，尾注释就落到第二行，
+//   抑制随即失效。形参名不影响 ABI（C 只认符号名与类型），所以缩短是安全的。
+foreign func lvglcj_canvas_draw_arc(cv: Int64, cx: Int32, cy: Int32, r: Int32, a0: Int32, a1: Int32, c: UInt32): Int32 // cjlint-ignore !G.FUN.01
+
 /* ==================================================== 动画（§5.9，t7） */
 /*
  * ★ var = anim_ctx（ADR-015）：因此**没有**「把动画绑到对象」的 var 参数，

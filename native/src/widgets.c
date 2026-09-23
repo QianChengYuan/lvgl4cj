@@ -146,7 +146,7 @@ int64_t lvglcj_button_create(int64_t parent)
  *   若把两者混成一个 NULL，调用方就没法给出正确报错
  *   （实测这类混淆会让"传错句柄"表现为"挂在屏幕上"，问题被静默吞掉）。
  */
-static int32_t widget_parent_of(int64_t parent, const char *fn_name, lv_obj_t **out)
+int32_t lvglcj_widget_parent_of(int64_t parent, const char *fn_name, lv_obj_t **out)
 {
     *out = NULL;
     if (parent == LVGLCJ_HANDLE_NULL) {
@@ -170,7 +170,7 @@ static int32_t widget_parent_of(int64_t parent, const char *fn_name, lv_obj_t **
  *   这类问题极难定位；三份拷贝等于三次犯错机会。
  *   报错文本仍由各自函数提供（要带自己的函数名），所以这里只管机械动作。
  */
-static int64_t widget_register_created(lv_obj_t *obj, const char *type_name)
+int64_t lvglcj_widget_register_created(lv_obj_t *obj, const char *type_name)
 {
     int64_t h = lvglcj_handle_register(obj, type_name);
     if (h == LVGLCJ_HANDLE_NULL) {
@@ -193,7 +193,7 @@ int64_t lvglcj_switch_create(int64_t parent)
     LVGLCJ_CHECK_LVGL_THREAD_RET();
 
     lv_obj_t *p = NULL;
-    if (widget_parent_of(parent, __func__, &p) != LVGLCJ_OK) {
+    if (lvglcj_widget_parent_of(parent, __func__, &p) != LVGLCJ_OK) {
         return LVGLCJ_HANDLE_NULL;
     }
 
@@ -203,7 +203,8 @@ int64_t lvglcj_switch_create(int64_t parent)
                             "lv_switch_create 失败（LVGL 内存池已满，或未启动显示导致没有默认屏幕）");
         return LVGLCJ_HANDLE_NULL;
     }
-    return widget_register_created(sw, "lv_switch_t");
+    return lvglcj_widget_register_created(sw, "lv_switch_t");
+
 }
 
 /*
@@ -254,7 +255,7 @@ int64_t lvglcj_checkbox_create(int64_t parent)
     LVGLCJ_CHECK_LVGL_THREAD_RET();
 
     lv_obj_t *p = NULL;
-    if (widget_parent_of(parent, __func__, &p) != LVGLCJ_OK) {
+    if (lvglcj_widget_parent_of(parent, __func__, &p) != LVGLCJ_OK) {
         return LVGLCJ_HANDLE_NULL;
     }
 
@@ -264,7 +265,7 @@ int64_t lvglcj_checkbox_create(int64_t parent)
                             "lv_checkbox_create 失败（LVGL 内存池已满，或未启动显示导致没有默认屏幕）");
         return LVGLCJ_HANDLE_NULL;
     }
-    return widget_register_created(cb, "lv_checkbox_t");
+    return lvglcj_widget_register_created(cb, "lv_checkbox_t");
 }
 
 int32_t lvglcj_checkbox_set_text(int64_t cb, const char *text)
@@ -303,7 +304,7 @@ int64_t lvglcj_bar_create(int64_t parent)
     LVGLCJ_CHECK_LVGL_THREAD_RET();
 
     lv_obj_t *p = NULL;
-    if (widget_parent_of(parent, __func__, &p) != LVGLCJ_OK) {
+    if (lvglcj_widget_parent_of(parent, __func__, &p) != LVGLCJ_OK) {
         return LVGLCJ_HANDLE_NULL;
     }
 
@@ -313,7 +314,7 @@ int64_t lvglcj_bar_create(int64_t parent)
                             "lv_bar_create 失败（LVGL 内存池已满，或未启动显示导致没有默认屏幕）");
         return LVGLCJ_HANDLE_NULL;
     }
-    return widget_register_created(bar, "lv_bar_t");
+    return lvglcj_widget_register_created(bar, "lv_bar_t");
 }
 
 int32_t lvglcj_bar_set_range(int64_t bar, int32_t min, int32_t max)
