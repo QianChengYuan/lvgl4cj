@@ -203,37 +203,117 @@ static void sdl2_mark_paused(int quit)
 
 /* ------------------------------------------------------------ flush sink */
 
+/*
+ * ★★ 上传必须在**渲染线程**上做，不能在 LVGL 线程上做。
+ *
+ *   实测结论（探针：probe/sdl_thread_texture_probe.c，三组对照）：
+ *     · 直接在 renderer 上画 + 回读        → 63488（红，说明回读通路是好的）
+ *     · 主线程 SDL_UpdateTexture + 回读    → 63488（红，说明主线程上传能到屏幕）
+ *     · 换一个线程 SDL_UpdateTexture + 回读 → 仍是旧的红（期望蓝 31）
+ *   也就是说：**跨线程的 SDL_UpdateTexture 被静默丢弃**，不报错、不生效。
+ *   SDL2 的 renderer 本来就要求只由创建它的线程使用，这是它的既有约束。
+ *
+ *   这正是「窗口全黑、但 flush==present、waitTimeout==0」的原因：
+ *   账簿全对（事件投递、等待、唤醒都正常），只是贴上去的纹理从来没被填过。
+ *
+ *   做法：flush 时只把区域参数存下来，由渲染线程在上传+渲染时一并应用。
+ *   安全性来自既有的等待协议 —— flush 随后会阻塞等渲染完成信号，
+ *   这段时间里 LVGL 不会复用那块像素缓冲（要等 flush_ready 才复用）。
+ */
+static lv_area_t   g_upd_rect;
+static uint8_t    *g_upd_stage = NULL;
+static int32_t     g_upd_stage_cap = 0;
+static int32_t     g_upd_pitch = 0;
+static _Atomic int g_upd_valid = 0;
+
+/*
+ * ★ 暂存区是**后端自己的**，拷的是像素内容，不是 LVGL 缓冲的地址。
+ *
+ *   第一版保存的是 `px_map` 指针，并依赖"flush 随后会阻塞等渲染完成"来保证
+ *   指针有效 —— ASan 立刻抓到 SEGV in sdl2_apply_texture_update：那个假设在
+ *   超时路径上不成立（flush 超时返回后 LVGL 会复用缓冲，而渲染事件仍在队列里，
+ *   主线程稍后再读就是悬空访问）。教训是：**跨线程传递要传值，不要传指向别人的指针**。
+ *
+ *   代价是每帧一次 memcpy：PARTIAL 下通常只有几 KB，首帧整屏 384KB 也在毫秒量级。
+ */
+static void sdl2_stage_texture_update(int64_t disp, const lv_area_t *area, uint8_t *px_map,
+                                      uint32_t stride)
+{
+    if (area == NULL || px_map == NULL) {
+        atomic_store(&g_upd_valid, 0);
+        return;
+    }
+    int32_t h = area->y2 - area->y1 + 1;
+    if (h <= 0 || stride == 0) {
+        atomic_store(&g_upd_valid, 0);
+        return;
+    }
+
+    size_t need = (size_t)stride * (size_t)h;
+    if ((int32_t)need > g_upd_stage_cap) {
+        uint8_t *n = (uint8_t *)realloc(g_upd_stage, need);
+        if (n == NULL) {
+            lvglcj_record_error(LVGLCJ_ERR_BACKEND_FAILURE, disp, 0, __func__,
+                                "渲染暂存区扩容失败（内存不足）");
+            atomic_store(&g_upd_valid, 0);
+            return;
+        }
+        g_upd_stage = n;
+        g_upd_stage_cap = (int32_t)need;
+    }
+
+    memcpy(g_upd_stage, px_map, need);
+    g_upd_rect = *area;
+    g_upd_pitch = (int32_t)stride;
+    atomic_store(&g_upd_valid, 1);
+}
+
+/* 在**渲染线程**上调用：把暂存区里的区域上传进纹理 */
+static void sdl2_apply_texture_update(int64_t disp)
+{
+    if (!atomic_load(&g_upd_valid)) {
+        return;
+    }
+    if (g_upd_stage != NULL && g_texture != NULL) {
+        SDL_Rect r;
+        r.x = g_upd_rect.x1;
+        r.y = g_upd_rect.y1;
+        r.w = g_upd_rect.x2 - g_upd_rect.x1 + 1;
+        r.h = g_upd_rect.y2 - g_upd_rect.y1 + 1;
+        if (SDL_UpdateTexture(g_texture, &r, g_upd_stage, g_upd_pitch) != 0) {
+            lvglcj_record_error(LVGLCJ_ERR_BACKEND_FAILURE, disp, 0, __func__,
+                                SDL_GetError());
+        }
+    }
+    atomic_store(&g_upd_valid, 0);
+}
+
 static void sdl2_flush_sink(int64_t disp, const lv_area_t *area, uint8_t *px_map,
                             uint32_t stride, void *user)
 {
     (void)user;
     atomic_fetch_add(&g_flush_count, 1);
 
-    /* 上传本次刷新的区域。PARTIAL 下 px_map 左上方对应 (x1, y1) */
-    if (area != NULL && px_map != NULL && g_texture != NULL) {
-        SDL_Rect r;
-        r.x = area->x1;
-        r.y = area->y1;
-        r.w = area->x2 - area->x1 + 1;
-        r.h = area->y2 - area->y1 + 1;
-        if (SDL_UpdateTexture(g_texture, &r, px_map, (int)stride) != 0) {
-            lvglcj_record_error(LVGLCJ_ERR_BACKEND_FAILURE, disp, 0, __func__,
-                                SDL_GetError());
-        }
-    }
-
     if (atomic_load(&g_paused)) {
-        /* 窗口已关闭/最小化：不再渲染，但仍要放行，否则 LVGL 卡住 */
+        /* 窗口已关闭/最小化：不再渲染，但仍要放行，否则 LVGL 卡住。
+         * 放在暂存之前：此时连拷贝都不必做。 */
+        atomic_store(&g_upd_valid, 0);
         lvglcj_display_flush_ready(disp);
         return;
     }
+
+    /* 拷进后端自己的暂存区，交给渲染线程上传
+     * （见上方长注释：跨线程上传会被静默丢弃；也不要传指向 LVGL 缓冲的指针） */
+    sdl2_stage_texture_update(disp, area, px_map, stride);
 
     if (sdl2_on_render_thread()) {
         /*
          * ★ 单线程（方案 C / 测试）：内联渲染。
          *   这里绝不能用「投递事件 + 等待」的路径 —— 唯一能处理该事件的
          *   线程就是当前线程，它会等到超时，每帧白等 100ms。
+         *   本线程就是渲染线程，所以这里也顺带完成上传。
          */
+        sdl2_apply_texture_update(disp);
         sdl2_render_now();
         lvglcj_display_flush_ready(disp);
         return;
@@ -476,6 +556,13 @@ int32_t lvglcj_sdl2_deinit(void)
     atomic_store(&g_present_count, 0);
     atomic_store(&g_wait_timeout_count, 0);
 
+    /* 渲染暂存区归后端所有，随会话释放 —— 不清掉就是每次 init/deinit 漏一块 */
+    free(g_upd_stage);
+    g_upd_stage = NULL;
+    g_upd_stage_cap = 0;
+    g_upd_pitch = 0;
+    atomic_store(&g_upd_valid, 0);
+
     return LVGLCJ_OK;
 }
 
@@ -501,6 +588,9 @@ int32_t lvglcj_sdl2_poll_events(void)
                 /* 测试注入：故意不响应，让等待方走超时分支 */
                 continue;
             }
+            /* ★ 顺序要紧：先上传（在主线程上做，见 sdl2_apply_texture_update 的说明），
+             *   再渲染、再唤醒等待方 —— 唤醒意味着"本帧已经用上了这块像素"，  */
+            sdl2_apply_texture_update(LVGLCJ_HANDLE_NULL);
             sdl2_render_now();
             atomic_store(&g_pending, 0);
             sdl2_signal_done();
