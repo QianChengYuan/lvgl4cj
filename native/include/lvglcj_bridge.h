@@ -516,6 +516,47 @@ int32_t lvglcj_bar_set_value(int64_t bar, int32_t value);
 /* ★ 出参形式：值域可为负，"负数即错误"在这里不成立 */
 int32_t lvglcj_bar_get_value(int64_t bar, int32_t *out_value);
 
+/* ============================================ 控件（P1 批次 2：slider / arc / led / spinner）
+ *
+ * 选它们的依据与批次 1 相同：属性面小、不引入新的资源类型。
+ *   · **slider 与 arc 与批次 1 的 bar 是同一种形状**（值 + 范围），
+ *     因此三者共用同一段实现与同一条「取状态」约定 ——
+ *     这是"形状相同就共用"的直接收益，不是巧合。
+ *   · led 只有颜色与亮度。
+ *   · spinner **没有属性**：它的旋转由 LVGL 内部动画驱动，不经过本层。
+ *
+ * ★ 沿用的约定（不重复展开，见批次 1 那段说明）：
+ *     · 创建走同一套四步（创建 → 登记 → 挂 DELETE 钩子）
+ *     · get_value 用**出参**（值域可为负，负数与错误码会撞车）
+ *     · set_value 一律**关动画**（设完立刻读值即为新值）
+ *     · 范围要求 min < max，顺序写反会被明确拒绝而不是变成显示异常
+ */
+
+/* slider：可拖动的取值控件（值域同 bar） */
+int64_t lvglcj_slider_create(int64_t parent);
+int32_t lvglcj_slider_set_range(int64_t slider, int32_t min, int32_t max);
+int32_t lvglcj_slider_set_value(int64_t slider, int32_t value);
+int32_t lvglcj_slider_get_value(int64_t slider, int32_t *out_value);
+
+/* arc：环形取值控件（值域同 bar）。
+ * 注意它与 slider 在 LVGL 侧的差异：lv_arc_set_value **没有** anim 参数，
+ * 而 lv_slider_set_value 有 —— 我们的 ABI 两边都不暴露动画，因此对外一致。 */
+int64_t lvglcj_arc_create(int64_t parent);
+int32_t lvglcj_arc_set_range(int64_t arc, int32_t min, int32_t max);
+int32_t lvglcj_arc_set_value(int64_t arc, int32_t value);
+int32_t lvglcj_arc_get_value(int64_t arc, int32_t *out_value);
+
+/* led：指示灯。颜色 0xRRGGBB（与 Canvas 绘制类一致，不含 alpha） */
+int64_t lvglcj_led_create(int64_t parent);
+int32_t lvglcj_led_set_color(int64_t led, uint32_t color);
+/* 亮度 0..255（越界明确拒绝；LVGL 收的是 uint8_t，放行会静默截断） */
+int32_t lvglcj_led_set_brightness(int64_t led, int32_t brightness);
+/* 开/关（非 0 = 开） */
+int32_t lvglcj_led_set_on(int64_t led, int32_t on);
+
+/* spinner：忙碌指示。**无属性、无配置** —— 旋转由 LVGL 内部动画驱动 */
+int64_t lvglcj_spinner_create(int64_t parent);
+
 /* ============================================================ §3.11.2 Canvas */
 int64_t lvglcj_canvas_create(int64_t parent);
 int32_t lvglcj_canvas_set_buffer(int64_t canvas, int32_t w, int32_t h);

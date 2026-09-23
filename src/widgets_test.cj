@@ -183,6 +183,79 @@ class WidgetTests {
         rt.deinitLvgl()
     }
 
+    // ==================================================== 七、P1 批次 2
+
+    /*
+     * slider / arc / led / spinner。
+     * 三者（含 bar）共用同一段「值 + 范围」实现，所以这里刻意让 slider 与 arc
+     * 走到**同一组边界**上：如果只有一处校验生效，就说明"形状复用"名存实亡。
+     */
+    @TestCase
+    func testSliderAndArcValueRoundTrip(): Unit {
+        let rt = LvglRuntime()
+        let _ = rt.startHeadless(320, 240)
+        let holder = LvObject.create(LvObject.screenActive())
+
+        let sl = LvSlider.create(holder)
+        sl.setRange(0, 100)
+        sl.setValue(42)
+        @Assert(sl.value(), 42)
+        /* 负值范围与负值往返：出参形式存在的理由 */
+        sl.setRange(-50, 50)
+        sl.setValue(-20)
+        @Assert(sl.value(), -20)
+        /* 与 bar 完全相同的校验：范围写反必须被拒 */
+        @Assert(throwsLvgl({=> sl.setRange(100, 0) }), true)
+
+        let ar = LvArc.create(holder)
+        ar.setRange(0, 360)
+        ar.setValue(90)
+        @Assert(ar.value(), 90)
+        @Assert(throwsLvgl({=> ar.setRange(5, 5) }), true)
+
+        holder.close()
+        rt.deinitLvgl()
+    }
+
+    @TestCase
+    func testLedBrightnessBoundsAndSpinner(): Unit {
+        let rt = LvglRuntime()
+        let _ = rt.startHeadless(320, 240)
+        let holder = LvObject.create(LvObject.screenActive())
+
+        let ld = LvLed.create(holder)
+        ld.setColor(0xFF0000)
+        ld.setBrightness(0)
+        ld.setBrightness(255)
+        ld.setOn(true)
+        ld.setOn(false)
+        /* ★ 越界必须抛错：LVGL 收 uint8_t，放行会静默截断成另一个值 */
+        @Assert(throwsLvgl({=> ld.setBrightness(256) }), true)
+        @Assert(throwsLvgl({=> ld.setBrightness(-1) }), true)
+
+        /* spinner 无属性可设 —— 能创建即其全部接口 */
+        let sp = LvSpinner.create(holder)
+        @Assert(sp.isAlive, true)
+
+        holder.close()
+        /* 四个新控件都随父级联失效 */
+        @Assert(isAliveAt(ld), false)
+        @Assert(isAliveAt(sp), false)
+        rt.deinitLvgl()
+    }
+
+    /*
+     * 小助手：把 isAlive 属性读成值。
+     * ★ 名字必须是**小驼峰** —— 首版写成 sl_alive，cjlint 报
+     *   G.NAM.04（Function name recommend to use lower camel case）。
+     *   顺带说明为什么要有这个助手：isAlive 是**属性**，
+     *   直接写在 @Assert 里容易与"看起来像方法调用"的写法混掉
+     *   （写成 isAlive() 会报 no matching function，错误信息不指向属性/方法之别）。
+     */
+    private func isAliveAt(o: LvObject): Bool {
+        return o.isAlive
+    }
+
     // ==================================================== 六、Canvas（§3.11.2）
 
     /*

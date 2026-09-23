@@ -360,3 +360,174 @@ int32_t lvglcj_bar_get_value(int64_t bar, int32_t *out_value)
     *out_value = lv_bar_get_value((lv_obj_t *)lvglcj_ptr_of(bar));
     return LVGLCJ_OK;
 }
+
+/* ============================================================ P1 批次 2（§7.1）
+ *
+ * slider / arc / led / spinner。
+ *
+ * ★ 这批有一半是"形状复用"：slider 与 arc 和上面的 bar 是**同一种形状**
+ *   （值 + 范围），所以范围校验与取值读取抽成两个共用 helper，
+ *   三者共用 —— 而不是把 bar 那段抄三遍。抄三遍的代价不是篇幅，
+ *   是"三份实现各自漂移"，而范围校验一旦有一处漏掉，
+ *   症状是"设了值但显示不对"这种极难归因的现象。
+ */
+
+/* bar / slider / arc 共用：范围必须 min < max */
+static int32_t widget_set_int_range(int64_t h, int32_t lo, int32_t hi, const char *fn_name,
+                                    void (*setter)(lv_obj_t *, int32_t, int32_t))
+{
+    LVGLCJ_HANDLE_GUARD(h, fn_name);
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    if (lo >= hi) {
+        lvglcj_record_error(LVGLCJ_ERR_INVALID_ARGUMENT, h, lo, fn_name,
+                            "范围要求 min < max；收到 min >= max");
+        return LVGLCJ_ERR_INVALID_ARGUMENT;
+    }
+    setter((lv_obj_t *)lvglcj_ptr_of(h), lo, hi);
+    return LVGLCJ_OK;
+}
+
+/* bar / slider / arc 共用：出参读取（均收 const lv_obj_t*） */
+static int32_t widget_read_int(int64_t h, const char *fn_name, int32_t *out,
+                               int32_t (*getter)(const lv_obj_t *))
+{
+    LVGLCJ_HANDLE_GUARD(h, fn_name);
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    if (out == NULL) {
+        lvglcj_record_error(LVGLCJ_ERR_INVALID_ARGUMENT, h, 0, fn_name,
+                            "出参指针为 NULL");
+        return LVGLCJ_ERR_INVALID_ARGUMENT;
+    }
+    *out = getter((const lv_obj_t *)lvglcj_ptr_of(h));
+    return LVGLCJ_OK;
+}
+
+/* 三个控件共用的"创建 + 登记"外壳；各自只给出 LVGL 的创建函数与类型名 */
+static int64_t widget_create_common(int64_t parent, const char *fn_name,
+                                    lv_obj_t *(*creator)(lv_obj_t *), const char *type_name)
+{
+    int32_t rc = lvglcj_require_initialized(fn_name);
+    if (rc != LVGLCJ_OK) {
+        return LVGLCJ_HANDLE_NULL;
+    }
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    lv_obj_t *p = NULL;
+    if (lvglcj_widget_parent_of(parent, fn_name, &p) != LVGLCJ_OK) {
+        return LVGLCJ_HANDLE_NULL;
+    }
+    lv_obj_t *o = creator(p);
+    if (o == NULL) {
+        lvglcj_record_error(LVGLCJ_ERR_OUT_OF_MEMORY, parent, 0, fn_name,
+                            "控件创建失败（LVGL 内存池已满，或未启动显示导致没有默认屏幕）");
+        return LVGLCJ_HANDLE_NULL;
+    }
+    return lvglcj_widget_register_created(o, type_name);
+}
+
+/* ------------------------------------------------------------ slider */
+
+int64_t lvglcj_slider_create(int64_t parent)
+{
+    return widget_create_common(parent, __func__, lv_slider_create, "lv_slider_t");
+}
+
+int32_t lvglcj_slider_set_range(int64_t slider, int32_t min, int32_t max)
+{
+    return widget_set_int_range(slider, min, max, __func__, lv_slider_set_range);
+}
+
+int32_t lvglcj_slider_set_value(int64_t slider, int32_t value)
+{
+    LVGLCJ_HANDLE_GUARD(slider, __func__);
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+    lv_slider_set_value((lv_obj_t *)lvglcj_ptr_of(slider), value, LV_ANIM_OFF);
+    return LVGLCJ_OK;
+}
+
+int32_t lvglcj_slider_get_value(int64_t slider, int32_t *out_value)
+{
+    return widget_read_int(slider, __func__, out_value, lv_slider_get_value);
+}
+
+/* ------------------------------------------------------------ arc */
+
+int64_t lvglcj_arc_create(int64_t parent)
+{
+    return widget_create_common(parent, __func__, lv_arc_create, "lv_arc_t");
+}
+
+int32_t lvglcj_arc_set_range(int64_t arc, int32_t min, int32_t max)
+{
+    return widget_set_int_range(arc, min, max, __func__, lv_arc_set_range);
+}
+
+int32_t lvglcj_arc_set_value(int64_t arc, int32_t value)
+{
+    LVGLCJ_HANDLE_GUARD(arc, __func__);
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+    /* lv_arc_set_value 没有 anim 参数（与 slider 的差异，见桥接头） */
+    lv_arc_set_value((lv_obj_t *)lvglcj_ptr_of(arc), value);
+    return LVGLCJ_OK;
+}
+
+int32_t lvglcj_arc_get_value(int64_t arc, int32_t *out_value)
+{
+    return widget_read_int(arc, __func__, out_value, lv_arc_get_value);
+}
+
+/* ------------------------------------------------------------ led */
+
+int64_t lvglcj_led_create(int64_t parent)
+{
+    return widget_create_common(parent, __func__, lv_led_create, "lv_led_t");
+}
+
+int32_t lvglcj_led_set_color(int64_t led, uint32_t color)
+{
+    LVGLCJ_HANDLE_GUARD(led, __func__);
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    /* 与 Canvas 绘制类一致：0xRRGGBB，高 8 位不解释（LED 颜色本身不带 alpha） */
+    lv_led_set_color((lv_obj_t *)lvglcj_ptr_of(led), lv_color_hex(color & 0xFFFFFFu));
+    return LVGLCJ_OK;
+}
+
+int32_t lvglcj_led_set_brightness(int64_t led, int32_t brightness)
+{
+    LVGLCJ_HANDLE_GUARD(led, __func__);
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    /* LVGL 收的是 uint8_t：越界会被静默截断，表现为"设 300 结果和 44 一样" */
+    if (brightness < 0 || brightness > 255) {
+        lvglcj_record_error(LVGLCJ_ERR_INVALID_ARGUMENT, led, brightness, __func__,
+                            "亮度超出 0..255（LVGL 收 uint8_t，放行会静默截断）");
+        return LVGLCJ_ERR_INVALID_ARGUMENT;
+    }
+    lv_led_set_brightness((lv_obj_t *)lvglcj_ptr_of(led), (uint8_t)brightness);
+    return LVGLCJ_OK;
+}
+
+int32_t lvglcj_led_set_on(int64_t led, int32_t on)
+{
+    LVGLCJ_HANDLE_GUARD(led, __func__);
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    lv_obj_t *o = (lv_obj_t *)lvglcj_ptr_of(led);
+    if (on) {
+        lv_led_on(o);
+    } else {
+        lv_led_off(o);
+    }
+    return LVGLCJ_OK;
+}
+
+/* ------------------------------------------------------------ spinner */
+
+int64_t lvglcj_spinner_create(int64_t parent)
+{
+    /* 无属性可设：旋转由 LVGL 内部的弧动画自行驱动，不经过本层 */
+    return widget_create_common(parent, __func__, lv_spinner_create, "lv_spinner_t");
+}

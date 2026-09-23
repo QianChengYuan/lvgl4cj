@@ -374,6 +374,42 @@ foreign func lvglcj_bar_set_value(bar: Int64, value: Int32): Int32
 
 foreign func lvglcj_bar_get_value(bar: Int64, out_value: CPointer<Int32>): Int32
 
+/* ---------------- P1 批次 2 控件（§7.1）：slider / arc / led / spinner ----------------
+ *
+ * slider 与 arc 的「值 + 范围」形状与 bar 完全相同，get_value 同样用**出参**
+ * （值域可为负，负数与错误码会撞车）——三者在 L1 与 C 侧共用同一段实现。
+ *
+ * led 的亮度边界必须由我们拦：LVGL 收 uint8_t，越界会静默截断
+ * （设 300 与设 44 的结果一样），这种"看起来生效了"的失败最难发现。
+ *
+ * spinner **没有属性**：旋转由 LVGL 内部动画驱动，不经过本层。
+ */
+foreign func lvglcj_slider_create(parent: Int64): Int64
+
+foreign func lvglcj_slider_set_range(slider: Int64, min: Int32, max: Int32): Int32
+
+foreign func lvglcj_slider_set_value(slider: Int64, value: Int32): Int32
+
+foreign func lvglcj_slider_get_value(slider: Int64, out_value: CPointer<Int32>): Int32
+
+foreign func lvglcj_arc_create(parent: Int64): Int64
+
+foreign func lvglcj_arc_set_range(arc: Int64, min: Int32, max: Int32): Int32
+
+foreign func lvglcj_arc_set_value(arc: Int64, value: Int32): Int32
+
+foreign func lvglcj_arc_get_value(arc: Int64, out_value: CPointer<Int32>): Int32
+
+foreign func lvglcj_led_create(parent: Int64): Int64
+
+foreign func lvglcj_led_set_color(led: Int64, color: UInt32): Int32
+
+foreign func lvglcj_led_set_brightness(led: Int64, brightness: Int32): Int32
+
+foreign func lvglcj_led_set_on(led: Int64, on: Int32): Int32
+
+foreign func lvglcj_spinner_create(parent: Int64): Int64
+
 /* ---------------- Canvas（§3.11.2）：自定义绘制的唯一出口 ----------------
  *
  * ★ 颜色参数的**解释方式在不同函数上不同**，调用方必须看清：

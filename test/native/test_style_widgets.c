@@ -330,6 +330,68 @@ int main(void)
               "★ 删除后句柄不再报告 ALIVE（不限定具体终态，见注释）");
     }
 
+    /* ================================================== 7d. P1 批次 2 控件
+     *
+     * 本段的重点不是"能创建"，而是三条**形状复用**是否真的复用到了行为上：
+     *   · slider / arc / bar 共用同一段范围校验 —— 所以三者的「范围写反被拒」
+     *     必须表现一致（如果只有一处生效，就是共享受损的信号）
+     *   · 两者的读值同样必须走出参：**负值要能原样读回**
+     *   · led 亮度边界必须拦在 0..255（LVGL 收 uint8_t，放行会静默截断）
+     */
+    printf("\n-- 7d. P1 批次 2 控件（slider / arc / led / spinner）--\n");
+    {
+        int64_t holder = lvglcj_obj_create(scr);
+        CHECK(holder != 0, "创建承载父对象");
+
+        int64_t sl = lvglcj_slider_create(holder);
+        CHECK(sl != 0, "创建 slider");
+        CHECK(lvglcj_slider_set_range(sl, 0, 100) == LVGLCJ_OK, "slider 设范围 0..100");
+        CHECK(lvglcj_slider_set_value(sl, 42) == LVGLCJ_OK, "slider 设值 42");
+        int32_t got = -1;
+        CHECK(lvglcj_slider_get_value(sl, &got) == LVGLCJ_OK, "slider 读值");
+        CHECK(got == 42, "★ slider 设完立刻读回即为新值");
+        CHECK(lvglcj_slider_set_range(sl, -50, 50) == LVGLCJ_OK, "slider 负值范围合法");
+        CHECK(lvglcj_slider_set_value(sl, -20) == LVGLCJ_OK, "slider 设负值");
+        CHECK(lvglcj_slider_get_value(sl, &got) == LVGLCJ_OK && got == -20,
+              "★ slider 负值原样读回（出参形式的意义所在）");
+        CHECK(lvglcj_slider_set_range(sl, 100, 0) == LVGLCJ_ERR_INVALID_ARGUMENT,
+              "★ slider 范围写反被拒（与 bar 同一段实现，行为必须一致）");
+        CHECK(lvglcj_slider_get_value(sl, NULL) == LVGLCJ_ERR_INVALID_ARGUMENT,
+              "slider 出参为 NULL 被拒");
+
+        int64_t ar = lvglcj_arc_create(holder);
+        CHECK(ar != 0, "创建 arc");
+        CHECK(lvglcj_arc_set_range(ar, 0, 360) == LVGLCJ_OK, "arc 设范围 0..360");
+        CHECK(lvglcj_arc_set_value(ar, 90) == LVGLCJ_OK, "arc 设值 90");
+        CHECK(lvglcj_arc_get_value(ar, &got) == LVGLCJ_OK && got == 90,
+              "★ arc 设完立刻读回即为新值");
+        CHECK(lvglcj_arc_set_range(ar, 5, 5) == LVGLCJ_ERR_INVALID_ARGUMENT,
+              "arc 范围 min == max 被拒（同上，一致性）");
+
+        int64_t ld = lvglcj_led_create(holder);
+        CHECK(ld != 0, "创建 led");
+        CHECK(lvglcj_led_set_color(ld, 0xFF0000u) == LVGLCJ_OK, "led 设颜色");
+        CHECK(lvglcj_led_set_brightness(ld, 0) == LVGLCJ_OK, "led 亮度 0 合法");
+        CHECK(lvglcj_led_set_brightness(ld, 255) == LVGLCJ_OK, "led 亮度 255 合法");
+        CHECK(lvglcj_led_set_brightness(ld, 256) == LVGLCJ_ERR_INVALID_ARGUMENT,
+              "★ led 亮度 256 被拒（放行会被 uint8_t 静默截断）");
+        CHECK(lvglcj_led_set_brightness(ld, -1) == LVGLCJ_ERR_INVALID_ARGUMENT,
+              "led 亮度为负被拒");
+        CHECK(lvglcj_led_set_on(ld, 1) == LVGLCJ_OK, "led 开");
+        CHECK(lvglcj_led_set_on(ld, 0) == LVGLCJ_OK, "led 关");
+
+        int64_t sp = lvglcj_spinner_create(holder);
+        CHECK(sp != 0, "创建 spinner（无属性可设，旋转由 LVGL 内部动画驱动）");
+        CHECK(lvglcj_handle_state(sp) == LVGLCJ_HSTATE_ALIVE, "spinner 句柄登记为 ALIVE");
+
+        /* 级联失效：删承载父对象后四个新控件的句柄都必须失效 */
+        CHECK(lvglcj_obj_delete(holder) == LVGLCJ_OK, "删除承载父对象");
+        CHECK(lvglcj_handle_state(sl) == LVGLCJ_HSTATE_INVALIDATED, "★ slider 句柄级联失效");
+        CHECK(lvglcj_handle_state(ar) == LVGLCJ_HSTATE_INVALIDATED, "★ arc 句柄级联失效");
+        CHECK(lvglcj_handle_state(ld) == LVGLCJ_HSTATE_INVALIDATED, "★ led 句柄级联失效");
+        CHECK(lvglcj_handle_state(sp) == LVGLCJ_HSTATE_INVALIDATED, "★ spinner 句柄级联失效");
+    }
+
     /* ================================================== 8. 清理顺序 */
     printf("\n-- 8. 清理 --\n");
     /*

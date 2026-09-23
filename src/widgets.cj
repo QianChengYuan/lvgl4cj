@@ -283,3 +283,183 @@ public class LvBar <: LvObject {
         return v
     }
 }
+
+/*
+ * ===================== P1 批次 2 控件（§7.1）=====================
+ * slider / arc / led / spinner。
+ *
+ * ★ 这批有一半是**形状复用**：slider 与 arc 和上面的 LvBar 是同一形状（值 + 范围），
+ *   所以下面把「设范围 / 设值 / 读值」三步抽成三个私有辅助函数，三者共用。
+ *   这不是为了少写代码，而是：三份拷贝会各自漂移，而范围校验漏一处的症状是
+ *   "设了值但显示不对"——极难归因。共用一个实现，就没有"某一份忘了校验"的可能。
+ *
+ * ★ 读值一律走出参（Array + acquireArrayRawData），理由同 LvBar.value()：
+ *   slider / arc 的值域同样可为负，用"负数表示错误"会与合法负值撞车。
+ */
+private func valueWidgetSetRange(f: (Int32, Int32) -> Int32, lo: Int32, hi: Int32, what: String): Unit {
+    throwIfError(f(lo, hi), what)
+}
+
+private func valueWidgetSetValue(f: (Int32) -> Int32, v: Int32, what: String): Unit {
+    throwIfError(f(v), what)
+}
+
+private func valueWidgetRead(f: (CPointer<Int32>) -> Int32, what: String): Int32 {
+    let buf = Array<Int32>(1, repeat: 0)
+    let h = unsafe { acquireArrayRawData(buf) }
+    let rc = unsafe { f(h.pointer) }
+    let v = buf[0]
+    unsafe { releaseArrayRawData(h) }
+    throwIfError(rc, what)
+    return v
+}
+
+/// 可拖动的取值控件（值域与 LvBar 相同）
+public class LvSlider <: LvObject {
+    private init(h: Int64) {
+        super(h)
+    }
+
+    /**
+     * 创建一个 slider。
+     *
+     * @throws[LvglException] 同 LvSwitch.create
+     */
+    public static func create(parent: LvObject): LvSlider {
+        ensureLvglOwnership()
+        let h = unsafe { lvglcj_slider_create(parent.handle) }
+        if (h <= 0) {
+            throw LvglException(OutOfMemory, "slider 创建失败（LVGL 内存池已满，或未启动显示导致没有默认屏幕）")
+        }
+        return LvSlider(h)
+    }
+
+    /// 设置取值区间（要求 lo < hi，写反会被明确拒绝）
+    public func setRange(lo: Int32, hi: Int32): LvSlider {
+        valueWidgetSetRange({a, b => unsafe { lvglcj_slider_set_range(handle, a, b) }}, lo, hi, "slider.setRange")
+        return this
+    }
+
+    /// 设当前值（关动画：设完立刻读回即为新值）
+    public func setValue(v: Int32): LvSlider {
+        valueWidgetSetValue({x => unsafe { lvglcj_slider_set_value(handle, x) }}, v, "slider.setValue")
+        return this
+    }
+
+    /// 读当前值（出参形式，理由见 LvBar.value()）
+    public func value(): Int32 {
+        return valueWidgetRead({p => unsafe { lvglcj_slider_get_value(handle, p) }}, "slider.value")
+    }
+}
+
+/// 环形取值控件（值域与 LvBar 相同）
+public class LvArc <: LvObject {
+    private init(h: Int64) {
+        super(h)
+    }
+
+    /**
+     * 创建一个 arc。
+     *
+     * @throws[LvglException] 同 LvSwitch.create
+     */
+    public static func create(parent: LvObject): LvArc {
+        ensureLvglOwnership()
+        let h = unsafe { lvglcj_arc_create(parent.handle) }
+        if (h <= 0) {
+            throw LvglException(OutOfMemory, "arc 创建失败（LVGL 内存池已满，或未启动显示导致没有默认屏幕）")
+        }
+        return LvArc(h)
+    }
+
+    /// 设置取值区间（要求 lo < hi）
+    public func setRange(lo: Int32, hi: Int32): LvArc {
+        valueWidgetSetRange({a, b => unsafe { lvglcj_arc_set_range(handle, a, b) }}, lo, hi, "arc.setRange")
+        return this
+    }
+
+    /// 设当前值（LVGL 侧 lv_arc_set_value 本就没有 anim 参数，对外与 slider 一致）
+    public func setValue(v: Int32): LvArc {
+        valueWidgetSetValue({x => unsafe { lvglcj_arc_set_value(handle, x) }}, v, "arc.setValue")
+        return this
+    }
+
+    /// 读当前值（出参形式）
+    public func value(): Int32 {
+        return valueWidgetRead({p => unsafe { lvglcj_arc_get_value(handle, p) }}, "arc.value")
+    }
+}
+
+/// 指示灯
+public class LvLed <: LvObject {
+    private init(h: Int64) {
+        super(h)
+    }
+
+    /**
+     * 创建一个 led。
+     *
+     * @throws[LvglException] 同 LvSwitch.create
+     */
+    public static func create(parent: LvObject): LvLed {
+        ensureLvglOwnership()
+        let h = unsafe { lvglcj_led_create(parent.handle) }
+        if (h <= 0) {
+            throw LvglException(OutOfMemory, "led 创建失败（LVGL 内存池已满，或未启动显示导致没有默认屏幕）")
+        }
+        return LvLed(h)
+    }
+
+    /// 颜色 **0xRRGGBB**（高 8 位不解释，与 Canvas 绘制类一致）
+    public func setColor(color: UInt32): LvLed {
+        throwIfError(unsafe { lvglcj_led_set_color(handle, color) }, "led.setColor")
+        return this
+    }
+
+    /**
+     * 亮度 0..255。
+     *
+     * @throws[LvglException] InvalidArgument —— 越界。LVGL 收 uint8_t，
+     *         放行会静默截断（设 300 与设 44 结果一样），所以必须在这里拦。
+     */
+    public func setBrightness(b: Int32): LvLed {
+        throwIfError(unsafe { lvglcj_led_set_brightness(handle, b) }, "led.setBrightness")
+        return this
+    }
+
+    /// 开 / 关
+    public func setOn(on: Bool): LvLed {
+        let v: Int32 = if (on) {
+            1
+        } else {
+            0
+        }
+        throwIfError(unsafe { lvglcj_led_set_on(handle, v) }, "led.setOn")
+        return this
+    }
+}
+
+/// 忙碌指示器
+public class LvSpinner <: LvObject {
+    private init(h: Int64) {
+        super(h)
+    }
+
+    /**
+     * 创建一个 spinner。
+     *
+     * ★ 它**没有任何可设的属性**：旋转由 LVGL 内部的弧动画自行驱动，
+     *   不经过本层 —— 所以这里除 create 之外不提供任何方法，这不是遗漏。
+     *   （与其它控件不同，它也没有 setValue/范围：那些属于 arc，不属于 spinner。）
+     *
+     * @throws[LvglException] 同 LvSwitch.create
+     */
+    public static func create(parent: LvObject): LvSpinner {
+        ensureLvglOwnership()
+        let h = unsafe { lvglcj_spinner_create(parent.handle) }
+        if (h <= 0) {
+            throw LvglException(OutOfMemory, "spinner 创建失败（LVGL 内存池已满，或未启动显示导致没有默认屏幕）")
+        }
+        return LvSpinner(h)
+    }
+}
