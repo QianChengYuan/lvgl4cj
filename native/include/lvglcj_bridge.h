@@ -468,6 +468,54 @@ int32_t lvglcj_label_set_long_mode(int64_t label, int32_t mode);
 
 int64_t lvglcj_button_create(int64_t parent);
 
+/* ============================================ 控件（P1 批次 1：switch / checkbox / bar）
+ *
+ * 设计文档 §7.1 把控件分成 P0（三个）与 P1 两批。本段是 P1 的第一批，
+ * 选它们的依据是**属性面最小且不需要新的资源类型**：
+ *   · switch / checkbox 共用「勾选态」这一种属性
+ *   · bar 用「值 + 范围」
+ * 于是不必引入图像描述符（image）、点数组（line）、字符串列表（dropdown）
+ * 这些新的值类型 —— 那些留到后续批次，因为它们各自带来新的所有权问题。
+ *
+ * ★ 三条本批控件共有的约定（三处必须一致，不要各自为政）：
+ *
+ * 1. **「取状态」返回 1/0，负数才是错误**（如 *_is_checked）。
+ *    0 是合法答案（"没勾上"），不该为了避开 0 而把它编成错误码 ——
+ *    那会逼调用方把正常情况写进异常分支。
+ *    （与 lvglcj_font_has_glyph 同一取舍，两处表述保持一致。）
+ *
+ *    ★ 但 **bar_get_value 不用这个形式**：条形的值域本身可为负，
+ *      "负数即错误"在那里不成立，所以它用出参 + 错误码返回。
+ *      同一个判断在不同函数上可以得出相反结论，关键是看值域是否与错误码重叠。
+ *
+ * 2. **set_value 一律关动画**（LV_ANIM_OFF）。带动画时"设完立刻读值"读到的是
+ *    中间态，而调用方（含测试）期望"设完即可读到新值"。确定性优先于观感；
+ *    需要动画的场景由调用方自己驱动。
+ *
+ * 3. 创建函数与 obj_create / label_create 完全同构（创建 → 登记 → 挂 DELETE 钩子）。
+ *    少挂钩子 → 父对象删除时该控件的句柄不被递归失效，
+ *    isAlive() 仍为 true 而底层对象已消失，即 §3.3 要防的悬空句柄。
+ */
+
+/* switch：二态开关（勾选态即"开"） */
+int64_t lvglcj_switch_create(int64_t parent);
+int32_t lvglcj_switch_set_checked(int64_t sw, int32_t checked);
+int32_t lvglcj_switch_is_checked(int64_t sw);
+
+/* checkbox：带文本的二态控件 */
+int64_t lvglcj_checkbox_create(int64_t parent);
+int32_t lvglcj_checkbox_set_text(int64_t cb, const char *text);
+int32_t lvglcj_checkbox_set_checked(int64_t cb, int32_t checked);
+int32_t lvglcj_checkbox_is_checked(int64_t cb);
+
+/* bar：进度/数值显示 */
+int64_t lvglcj_bar_create(int64_t parent);
+/* 范围：LVGL 要求 min < max，这里显式拦住相反的顺序 */
+int32_t lvglcj_bar_set_range(int64_t bar, int32_t min, int32_t max);
+int32_t lvglcj_bar_set_value(int64_t bar, int32_t value);
+/* ★ 出参形式：值域可为负，"负数即错误"在这里不成立 */
+int32_t lvglcj_bar_get_value(int64_t bar, int32_t *out_value);
+
 /* ============================================================ §3.11.2 Canvas */
 int64_t lvglcj_canvas_create(int64_t parent);
 int32_t lvglcj_canvas_set_buffer(int64_t canvas, int32_t w, int32_t h);

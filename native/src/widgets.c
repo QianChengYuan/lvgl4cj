@@ -130,3 +130,232 @@ int64_t lvglcj_button_create(int64_t parent)
     lvglcj_lifecycle_install_hook(btn);
     return h;
 }
+
+/* ============================================================ P1 批次 1（§7.1）
+ *
+ * switch / checkbox / bar。三条共有约定见桥接头同名注释块 —— 这里不复述，
+ * 只说**实现层面**多出来的两个 helper 及其理由。
+ */
+
+/*
+ * 解析父句柄。
+ *
+ * ★ 用「错误码返回 + 出参」而不是"直接返回解析出的指针"，因为
+ *   parent == 0 是**合法**输入（表示挂到当前活动屏幕，与 obj.c 一致），
+ *   此时解析结果也是 NULL —— 与"父句柄无效"的 NULL 无法区分。
+ *   若把两者混成一个 NULL，调用方就没法给出正确报错
+ *   （实测这类混淆会让"传错句柄"表现为"挂在屏幕上"，问题被静默吞掉）。
+ */
+static int32_t widget_parent_of(int64_t parent, const char *fn_name, lv_obj_t **out)
+{
+    *out = NULL;
+    if (parent == LVGLCJ_HANDLE_NULL) {
+        return LVGLCJ_OK; /* 显式表示"用当前活动屏幕" */
+    }
+    lv_obj_t *p = (lv_obj_t *)lvglcj_ptr_of(parent);
+    if (p == NULL) {
+        lvglcj_record_error(LVGLCJ_ERR_INVALID_HANDLE, parent, 0, fn_name,
+                            "父对象句柄无效；若想挂到当前屏幕，请传 0");
+        return LVGLCJ_ERR_INVALID_HANDLE;
+    }
+    *out = p;
+    return LVGLCJ_OK;
+}
+
+/*
+ * 「创建 → 登记 → 挂 DELETE 钩子」三步。
+ *
+ * ★ 抽出来不是为了少写几行，而是**去掉三份拷贝各自漂移的可能**：
+ *   这三步里漏掉挂钩子会产生悬空句柄（isAlive 为 true 而对象已删），
+ *   这类问题极难定位；三份拷贝等于三次犯错机会。
+ *   报错文本仍由各自函数提供（要带自己的函数名），所以这里只管机械动作。
+ */
+static int64_t widget_register_created(lv_obj_t *obj, const char *type_name)
+{
+    int64_t h = lvglcj_handle_register(obj, type_name);
+    if (h == LVGLCJ_HANDLE_NULL) {
+        /* 登记失败必须把原生对象也删掉，否则原生对象泄漏 */
+        lv_obj_delete(obj);
+        return LVGLCJ_HANDLE_NULL;
+    }
+    lvglcj_lifecycle_install_hook(obj);
+    return h;
+}
+
+/* ------------------------------------------------------------ switch */
+
+int64_t lvglcj_switch_create(int64_t parent)
+{
+    int32_t rc = lvglcj_require_initialized(__func__);
+    if (rc != LVGLCJ_OK) {
+        return LVGLCJ_HANDLE_NULL;
+    }
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    lv_obj_t *p = NULL;
+    if (widget_parent_of(parent, __func__, &p) != LVGLCJ_OK) {
+        return LVGLCJ_HANDLE_NULL;
+    }
+
+    lv_obj_t *sw = lv_switch_create(p);
+    if (sw == NULL) {
+        lvglcj_record_error(LVGLCJ_ERR_OUT_OF_MEMORY, parent, 0, __func__,
+                            "lv_switch_create 失败（LVGL 内存池可能已满）");
+        return LVGLCJ_HANDLE_NULL;
+    }
+    return widget_register_created(sw, "lv_switch_t");
+}
+
+/*
+ * 勾选态用 LVGL 的 CHECKED 状态位实现，而不是控件自己的字段 ——
+ * 这样样式系统（LV_STATE_CHECKED 选择器）与状态位天然一致，
+ * 不会出现"控件认为已开、样式仍按未开渲染"的分叉。
+ */
+static int32_t widget_set_checked(int64_t handle, int32_t checked, const char *fn_name)
+{
+    LVGLCJ_HANDLE_GUARD(handle, fn_name);
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    lv_obj_t *o = (lv_obj_t *)lvglcj_ptr_of(handle);
+    if (checked) {
+        lv_obj_add_state(o, LV_STATE_CHECKED);
+    } else {
+        lv_obj_remove_state(o, LV_STATE_CHECKED);
+    }
+    return LVGLCJ_OK;
+}
+
+static int32_t widget_is_checked(int64_t handle, const char *fn_name)
+{
+    LVGLCJ_HANDLE_GUARD(handle, fn_name);
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    return lv_obj_has_state((lv_obj_t *)lvglcj_ptr_of(handle), LV_STATE_CHECKED) ? 1 : 0;
+}
+
+int32_t lvglcj_switch_set_checked(int64_t sw, int32_t checked)
+{
+    return widget_set_checked(sw, checked, __func__);
+}
+
+int32_t lvglcj_switch_is_checked(int64_t sw)
+{
+    return widget_is_checked(sw, __func__);
+}
+
+/* ------------------------------------------------------------ checkbox */
+
+int64_t lvglcj_checkbox_create(int64_t parent)
+{
+    int32_t rc = lvglcj_require_initialized(__func__);
+    if (rc != LVGLCJ_OK) {
+        return LVGLCJ_HANDLE_NULL;
+    }
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    lv_obj_t *p = NULL;
+    if (widget_parent_of(parent, __func__, &p) != LVGLCJ_OK) {
+        return LVGLCJ_HANDLE_NULL;
+    }
+
+    lv_obj_t *cb = lv_checkbox_create(p);
+    if (cb == NULL) {
+        lvglcj_record_error(LVGLCJ_ERR_OUT_OF_MEMORY, parent, 0, __func__,
+                            "lv_checkbox_create 失败（LVGL 内存池可能已满）");
+        return LVGLCJ_HANDLE_NULL;
+    }
+    return widget_register_created(cb, "lv_checkbox_t");
+}
+
+int32_t lvglcj_checkbox_set_text(int64_t cb, const char *text)
+{
+    LVGLCJ_HANDLE_GUARD(cb, __func__);
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    if (text == NULL) {
+        lvglcj_record_error(LVGLCJ_ERR_INVALID_ARGUMENT, cb, 0, __func__,
+                            "文本指针为 NULL");
+        return LVGLCJ_ERR_INVALID_ARGUMENT;
+    }
+    /* 与 label_set_text 同理：LVGL 自己拷贝，仓颉侧的 CString 返回后即可释放 */
+    lv_checkbox_set_text((lv_obj_t *)lvglcj_ptr_of(cb), text);
+    return LVGLCJ_OK;
+}
+
+int32_t lvglcj_checkbox_set_checked(int64_t cb, int32_t checked)
+{
+    return widget_set_checked(cb, checked, __func__);
+}
+
+int32_t lvglcj_checkbox_is_checked(int64_t cb)
+{
+    return widget_is_checked(cb, __func__);
+}
+
+/* ------------------------------------------------------------ bar */
+
+int64_t lvglcj_bar_create(int64_t parent)
+{
+    int32_t rc = lvglcj_require_initialized(__func__);
+    if (rc != LVGLCJ_OK) {
+        return LVGLCJ_HANDLE_NULL;
+    }
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    lv_obj_t *p = NULL;
+    if (widget_parent_of(parent, __func__, &p) != LVGLCJ_OK) {
+        return LVGLCJ_HANDLE_NULL;
+    }
+
+    lv_obj_t *bar = lv_bar_create(p);
+    if (bar == NULL) {
+        lvglcj_record_error(LVGLCJ_ERR_OUT_OF_MEMORY, parent, 0, __func__,
+                            "lv_bar_create 失败（LVGL 内存池可能已满）");
+        return LVGLCJ_HANDLE_NULL;
+    }
+    return widget_register_created(bar, "lv_bar_t");
+}
+
+int32_t lvglcj_bar_set_range(int64_t bar, int32_t min, int32_t max)
+{
+    LVGLCJ_HANDLE_GUARD(bar, __func__);
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    /*
+     * LVGL 要求 min < max。这里显式拦住相反或相等的顺序：
+     * 放行的话 LVGL 内部的取值范围换算会出现除零/反向映射，
+     * 表现为"设了值但显示不对"这种很难归因的现象 ——
+     * 与其让它变成一个显示问题，不如在这里变成一个明确报错。
+     */
+    if (min >= max) {
+        lvglcj_record_error(LVGLCJ_ERR_INVALID_ARGUMENT, bar, min, __func__,
+                            "范围要求 min < max；收到 min >= max");
+        return LVGLCJ_ERR_INVALID_ARGUMENT;
+    }
+    lv_bar_set_range((lv_obj_t *)lvglcj_ptr_of(bar), min, max);
+    return LVGLCJ_OK;
+}
+
+int32_t lvglcj_bar_set_value(int64_t bar, int32_t value)
+{
+    LVGLCJ_HANDLE_GUARD(bar, __func__);
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    /* ★ 关动画：带动画时"设完立刻读值"读到的是中间态，见桥接头的约定 2 */
+    lv_bar_set_value((lv_obj_t *)lvglcj_ptr_of(bar), value, LV_ANIM_OFF);
+    return LVGLCJ_OK;
+}
+
+int32_t lvglcj_bar_get_value(int64_t bar, int32_t *out_value)
+{
+    LVGLCJ_HANDLE_GUARD(bar, __func__);
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    if (out_value == NULL) {
+        lvglcj_record_error(LVGLCJ_ERR_INVALID_ARGUMENT, bar, 0, __func__,
+                            "出参指针为 NULL");
+        return LVGLCJ_ERR_INVALID_ARGUMENT;
+    }
+    *out_value = lv_bar_get_value((lv_obj_t *)lvglcj_ptr_of(bar));
+    return LVGLCJ_OK;
+}

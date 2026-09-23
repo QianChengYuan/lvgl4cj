@@ -188,6 +188,75 @@ int main(void)
               "★ 对象删除后样式即可释放（DELETE 钩子已解除引用）");
     }
 
+    /* ================================================== 7b. P1 批次 1 控件
+     *
+     * 覆盖三类**容易漏掉**的行为，而不是只做"创建成功"的冒烟：
+     *   1. 状态往返（设了能读回来）—— 这一条钉住 set_value 关动画的决定：
+     *      若哪天改回带动画，这里的读值会读到中间态而立刻失败。
+     *   2. 参数校验（min >= max 必须被拦下）—— 放行的话它会变成
+     *      "设了值但显示不对"这种难以归因的现象，而不是一个明确报错。
+     *   3. ★ 父对象删除后句柄必须**级联失效** —— 这是控件实现最容易漏的一步
+     *      （创建时忘挂 DELETE 钩子）。漏了则 isAlive 仍为 true 而底层对象已消失，
+     *      即 §3.3 要防的悬空句柄。三个新控件逐一验证。
+     */
+    printf("\n-- 7b. P1 批次 1 控件（switch / checkbox / bar）--\n");
+    {
+        int64_t holder = lvglcj_obj_create(scr);
+        CHECK(holder != 0, "创建承载父对象");
+
+        int64_t sw = lvglcj_switch_create(holder);
+        CHECK(sw != 0, "创建 switch");
+        CHECK(lvglcj_handle_state(sw) == LVGLCJ_HSTATE_ALIVE, "switch 句柄登记为 ALIVE");
+        CHECK(lvglcj_switch_is_checked(sw) == 0, "初始未勾选（0 是答案，不是错误）");
+        CHECK(lvglcj_switch_set_checked(sw, 1) == LVGLCJ_OK, "置为勾选");
+        CHECK(lvglcj_switch_is_checked(sw) == 1, "读回已勾选");
+        CHECK(lvglcj_switch_set_checked(sw, 0) == LVGLCJ_OK, "置回未勾选");
+        CHECK(lvglcj_switch_is_checked(sw) == 0, "读回未勾选");
+
+        int64_t cb = lvglcj_checkbox_create(holder);
+        CHECK(cb != 0, "创建 checkbox");
+        CHECK(lvglcj_checkbox_set_text(cb, "选项 A") == LVGLCJ_OK, "设置文本");
+        CHECK(lvglcj_checkbox_set_text(cb, NULL) == LVGLCJ_ERR_INVALID_ARGUMENT,
+              "文本指针为 NULL：明确拒绝");
+        CHECK(lvglcj_checkbox_set_checked(cb, 1) == LVGLCJ_OK, "勾选");
+        CHECK(lvglcj_checkbox_is_checked(cb) == 1, "读回已勾选");
+
+        int64_t bar = lvglcj_bar_create(holder);
+        CHECK(bar != 0, "创建 bar");
+        CHECK(lvglcj_bar_set_range(bar, 0, 100) == LVGLCJ_OK, "设置范围 0..100");
+        CHECK(lvglcj_bar_set_value(bar, 42) == LVGLCJ_OK, "设值 42");
+        int32_t got = -1;
+        CHECK(lvglcj_bar_get_value(bar, &got) == LVGLCJ_OK, "读值");
+        CHECK(got == 42, "★ 设完立刻读回即为新值（关动画的直接后果）");
+        CHECK(lvglcj_bar_get_value(bar, NULL) == LVGLCJ_ERR_INVALID_ARGUMENT,
+              "出参为 NULL：明确拒绝");
+        CHECK(lvglcj_bar_set_range(bar, 100, 0) == LVGLCJ_ERR_INVALID_ARGUMENT,
+              "★ min > max 被拒绝（否则会成为显示异常而非报错）");
+        CHECK(lvglcj_bar_set_range(bar, 5, 5) == LVGLCJ_ERR_INVALID_ARGUMENT,
+              "min == max 同样被拒绝");
+        /* 负值范围是合法的（bar 的值域本身可为负），不该被误拦 */
+        CHECK(lvglcj_bar_set_range(bar, -50, 50) == LVGLCJ_OK, "负值范围合法");
+        CHECK(lvglcj_bar_set_value(bar, -20) == LVGLCJ_OK, "设负值");
+        CHECK(lvglcj_bar_get_value(bar, &got) == LVGLCJ_OK && got == -20,
+              "★ 负值能正确读回（这正是 get_value 必须用出参的原因）");
+
+        /* 无效句柄必须报错而不是崩溃 */
+        CHECK(lvglcj_switch_set_checked(0, 1) != LVGLCJ_OK, "句柄 0：报错而非崩溃");
+        CHECK(lvglcj_bar_get_value(123456789, &got) != LVGLCJ_OK,
+              "不存在的句柄：报错而非崩溃");
+
+        /* ★ 级联失效：删掉承载父对象后，三个控件的句柄都必须变为 INVALIDATED */
+        CHECK(lvglcj_obj_delete(holder) == LVGLCJ_OK, "删除承载父对象");
+        CHECK(lvglcj_handle_state(sw) == LVGLCJ_HSTATE_INVALIDATED,
+              "★ switch 句柄随父级联失效");
+        CHECK(lvglcj_handle_state(cb) == LVGLCJ_HSTATE_INVALIDATED,
+              "★ checkbox 句柄随父级联失效");
+        CHECK(lvglcj_handle_state(bar) == LVGLCJ_HSTATE_INVALIDATED,
+              "★ bar 句柄随父级联失效");
+        CHECK(lvglcj_switch_set_checked(sw, 1) != LVGLCJ_OK,
+              "对已失效的 switch 操作：报错而非 UAF");
+    }
+
     /* ================================================== 8. 清理顺序 */
     printf("\n-- 8. 清理 --\n");
     /*

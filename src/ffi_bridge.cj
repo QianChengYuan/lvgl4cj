@@ -339,6 +339,41 @@ foreign func lvglcj_label_set_long_mode(label: Int64, mode: Int32): Int32
 
 foreign func lvglcj_button_create(parent: Int64): Int64
 
+/* ---------------- P1 批次 1 控件（§7.1）：switch / checkbox / bar ----------------
+ *
+ * ★ *_is_checked 的返回值是**三态**而非错误码：
+ *     1 = 已勾选，0 = 未勾选（**合法答案**），负数 = 错误。
+ *   所以调用方不能写 `rc != 0` 判成功 —— 见桥接头同名说明。
+ *
+ * ★ bar_get_value 用**出参**：条形的值域本身可为负，
+ *   "负数即错误"在那里不成立，只能把值与错误码分开放。
+ *   同一个"取状态"问题在不同函数上得出相反结论，判据是**值域是否与错误码重叠**。
+ *
+ * ★ min/max 用 min/max 作参数名会与 Cangjie 标准库函数名混淆，
+ *   这里保持与 C 侧一致的 lo/hi 语义但沿用 min/max 命名（仅参数名，作用域局部）。
+ */
+foreign func lvglcj_switch_create(parent: Int64): Int64
+
+foreign func lvglcj_switch_set_checked(sw: Int64, checked: Int32): Int32
+
+foreign func lvglcj_switch_is_checked(sw: Int64): Int32
+
+foreign func lvglcj_checkbox_create(parent: Int64): Int64
+
+foreign func lvglcj_checkbox_set_text(cb: Int64, text: CString): Int32
+
+foreign func lvglcj_checkbox_set_checked(cb: Int64, checked: Int32): Int32
+
+foreign func lvglcj_checkbox_is_checked(cb: Int64): Int32
+
+foreign func lvglcj_bar_create(parent: Int64): Int64
+
+foreign func lvglcj_bar_set_range(bar: Int64, min: Int32, max: Int32): Int32
+
+foreign func lvglcj_bar_set_value(bar: Int64, value: Int32): Int32
+
+foreign func lvglcj_bar_get_value(bar: Int64, out_value: CPointer<Int32>): Int32
+
 /* ==================================================== 动画（§5.9，t7） */
 /*
  * ★ var = anim_ctx（ADR-015）：因此**没有**「把动画绑到对象」的 var 参数，
