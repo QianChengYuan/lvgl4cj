@@ -1171,3 +1171,99 @@ int32_t lvglcj_table_clear_cell_ctrl(int64_t tbl, int32_t row, int32_t col, int3
                              (lv_table_cell_ctrl_t)ctrl);
     return LVGLCJ_OK;
 }
+
+/* ------------------------------------------------------------ keyboard */
+
+int64_t lvglcj_keyboard_create(int64_t parent)
+{
+    return widget_create_common(parent, __func__, lv_keyboard_create, "lv_keyboard_t");
+}
+
+int32_t lvglcj_keyboard_set_textarea(int64_t kb, int64_t ta)
+{
+    LVGLCJ_HANDLE_GUARD(kb, __func__);
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    /*
+     * ta == 0 是**解绑**：这不是权宜之计，而是本入口的正式语义。
+     * 理由见下面的生命周期说明 —— 删除 textarea 之前必须先走这一步。
+     */
+    lv_obj_t *ta_obj = NULL;
+    if (ta != 0) {
+        /* 复用句柄表给出的错误码，而不是在这里自己写一个 —— 少一处需要对齐的东西。 */
+        int32_t rc = lvglcj_handle_require(ta, __func__);
+        if (rc != LVGLCJ_OK) {
+            return rc;
+        }
+        ta_obj = (lv_obj_t *)lvglcj_ptr_of(ta);
+    }
+
+    /*
+     * ★★ 这个绑定是**单向**的，而且 LVGL 不会替我们清理它 —— 读实现确认了三点：
+     *      · lv_keyboard.c 里没有任何 LV_EVENT_DELETE 处理；
+     *      · 全文件唯一给 keyboard->ta 赋值的地方就是 lv_keyboard_set_textarea；
+     *      · lv_textarea.c 完全不引用 keyboard（被绑的一方根本不知道这件事）。
+     *    而按键处理会直接解引用 keyboard->ta。
+     *
+     *    于是「删掉 textarea、继续按键」= 踩悬空指针，且崩溃点在 LVGL 的事件回调里，
+     *    不在我们的包装函数里 —— 本层没有"顺手拦一下"的位置。所以只能把它写成契约：
+     *    删除 textarea 前必须先解绑。L1 侧为此提供 clearTextarea。
+     */
+    lv_keyboard_set_textarea((lv_obj_t *)lvglcj_ptr_of(kb), ta_obj);
+    return LVGLCJ_OK;
+}
+
+int64_t lvglcj_keyboard_get_textarea(int64_t kb)
+{
+    LVGLCJ_HANDLE_GUARD(kb, __func__);
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    lv_obj_t *ta = lv_keyboard_get_textarea((lv_obj_t *)lvglcj_ptr_of(kb));
+    if (ta == NULL) {
+        return LVGLCJ_HANDLE_NULL; /* 未绑定：用空句柄表达，而不是错误码 */
+    }
+
+    /*
+     * ★ 反查句柄，而不是把裸指针交出去。
+     *   这样即便被绑的 textarea 已被删除，拿到手的也是它那个**已失效的句柄** ——
+     *   调用方对它做任何操作都会得到正常的报错，而不是拿着野指针去用。
+     *   （句柄表对已删除对象保留表项，正是为了这种情况能给出可诊断的结果。）
+     */
+    return lvglcj_handle_of(ta); /* 未注册则返回 LVGLCJ_HANDLE_NULL */
+}
+
+int32_t lvglcj_keyboard_set_mode(int64_t kb, int32_t mode)
+{
+    LVGLCJ_HANDLE_GUARD(kb, __func__);
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    /*
+     * 越界必须拦：LVGL 会拿这个值去索引布局表（update_map 里按模式取 map），
+     * 越界就是一次界外读 —— 而它不会自己检查。
+     */
+    if (mode < 0 || mode > LVGLCJ_KEYBOARD_MODE_MAX) {
+        lvglcj_record_error(LVGLCJ_ERR_INVALID_ARGUMENT, kb, mode, __func__,
+                            "模式取值越界（合法范围 0..7；TEXT_ARABIC 需编译期开关，本项目未开）");
+        return LVGLCJ_ERR_INVALID_ARGUMENT;
+    }
+
+    lv_keyboard_set_mode((lv_obj_t *)lvglcj_ptr_of(kb), (lv_keyboard_mode_t)mode);
+    return LVGLCJ_OK;
+}
+
+int32_t lvglcj_keyboard_get_mode(int64_t kb)
+{
+    LVGLCJ_HANDLE_GUARD(kb, __func__);
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    return (int32_t)lv_keyboard_get_mode((lv_obj_t *)lvglcj_ptr_of(kb));
+}
+
+int32_t lvglcj_keyboard_set_popovers(int64_t kb, int32_t on)
+{
+    LVGLCJ_HANDLE_GUARD(kb, __func__);
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    lv_keyboard_set_popovers((lv_obj_t *)lvglcj_ptr_of(kb), on ? true : false);
+    return LVGLCJ_OK;
+}

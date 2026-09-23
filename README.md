@@ -79,10 +79,10 @@ main() {
 | --- | --- |
 | L1 模块（`src/*.cj`，不含测试） | **19** |
 | C 侧实现（`native/src/*.c`） | **22** |
-| ABI 声明函数 | **263**（已实现 **263**，未实现 **0** —— 自检为「声明与产物完全一致」） |
-| 仓颉侧 `foreign` 声明 | **280** |
-| C 用例 | **10 个可执行 / 560 项检查** |
-| 仓颉测试 | **81 用例（80 通过 / 1 跳过 / 0 失败）** |
+| ABI 声明函数 | **270**（已实现 **270**，未实现 **0** —— 自检为「声明与产物完全一致」） |
+| 仓颉侧 `foreign` 声明 | **287** |
+| C 用例 | **10 个可执行 / 588 项检查** |
+| 仓颉测试 | **82 用例（81 通过 / 1 跳过 / 0 失败）** |
 
 已具备的能力（摘要）：
 
@@ -97,9 +97,9 @@ main() {
   `LvSwitch` / `LvCheckbox` / `LvBar`，P1 批次 2 的 `LvSlider` / `LvArc` /
   `LvLed` / `LvSpinner`，P1 批次 3 的 `LvDropdown`，P1 批次 4 的 `LvLine`，
   P1 批次 5 的 `LvImage`，P1 批次 6 的 `LvRoller`，P1 批次 7 的 `LvTextarea`，
-  P1 批次 8 的 `LvTable`，
+  P1 批次 8 的 `LvTable`，P1 批次 9 的 `LvKeyboard`，
   以及 `LvCanvas`（自定义绘制的唯一出口，§3.11.2）。
-  **共 17 个**，P1 清单其余 2 个见「已知边界」
+  **共 18 个**，P1 清单其余 1 个见「已知边界」
 - **可观测性**：`LvDebug`（`objCount` / `memMonitor` / `perfSample` / `dumpTree`）、`LvBench`（性能测量）
 
 ---
@@ -155,11 +155,19 @@ main() {
      canvas 函数**，不含 polygon —— 以头文件为契约记录，故不实现（需要时应走契约变更）。
    另注意颜色参数的**解释方式不一致**：绘制类与 `fillBg` 是 `0xRRGGBB`（高 8 位不解释，
    透明度走 `opa`），而 `setPalette` 是 `0xAARRGGBB`（调色板项自带 alpha）。
-2. **控件 17 个**：`LvObject`（基类）、`LvLabel`、`LvButton`、`LvSwitch`、
+2. **控件 18 个**：`LvObject`（基类）、`LvLabel`、`LvButton`、`LvSwitch`、
    `LvCheckbox`、`LvBar`、`LvSlider`、`LvArc`、`LvLed`、`LvSpinner`、
-   `LvDropdown`、`LvLine`、`LvImage`、`LvRoller`、`LvTextarea`、`LvTable`、`LvCanvas`。
-   设计文档 §7.1 的 P1 清单还剩 **2 个**未做，全是复合控件：
-   `chart` `keyboard`。
+   `LvDropdown`、`LvLine`、`LvImage`、`LvRoller`、`LvTextarea`、`LvTable`、
+   `LvKeyboard`、`LvCanvas`。
+   设计文档 §7.1 的 P1 清单还剩 **1 个**未做：`chart`。
+
+   ★ 使用 `LvKeyboard` 有一条必须遵守的契约：**删除 textarea 之前要先
+   `clearTextarea()`**。LVGL 不会在 textarea 被删时清理这条绑定（读实现确认：
+   键盘单向持有裸指针，`lv_keyboard.c` 无 `LV_EVENT_DELETE` 处理，而 `lv_textarea.c`
+   完全不引用 keyboard），按键处理却直接解引用它 —— 删后按键就是踩悬空指针，
+   且崩溃点在 LVGL 的事件回调里，本层没有可拦截的位置。
+   （`setTextarea` 的入参类型是 `LvTextarea` 而非 `LvObject`，把"传错对象"这条
+   约束交给编译期而不是文档。）
 
    ★ 封装 `table` 时在本项目锁定的 **LVGL v9.2.2** 上发现一个**上游缺陷**：
    `lv_table_set_column_count` 在**缩小列数**时会解引用 NULL 而段错误

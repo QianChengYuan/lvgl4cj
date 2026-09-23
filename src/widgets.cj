@@ -759,6 +759,19 @@ public class LvTextarea <: LvObject {
         super(h)
     }
 
+    /*
+     * 把一个**已存在**的 textarea（句柄来自反查，如 LvKeyboard.textarea()）包成对象。
+     *
+     * 刻意用同包可见的静态入口，而不是把构造放宽成 internal：
+     *   · 构造一旦放宽，"凭一个句柄造对象"就成了所有同包代码都能做的事，
+     *     而这是个应当被限制在少数明确场景（这里是"键盘取回绑定目标"）的能力；
+     *   · 也不做成 public —— 外部用户不该有"凭句柄造对象"的入口，
+     *     那会绕开 create 语义（比如以为它会新建对象）。
+     */
+    static func fromExistingHandle(h: Int64): LvTextarea {
+        return LvTextarea(h)
+    }
+
     /**
      * 创建一个 textarea。创建后需 setText 才有内容（空框会显示占位文本）。
      *
@@ -1032,6 +1045,120 @@ public class LvTable <: LvObject {
             unsafe { lvglcj_table_clear_cell_ctrl(handle, row, col, LVGLCJ_TABLE_CTRL_TEXT_CROP) }
         }
         throwIfError(rc, "table.setTextCrop")
+        return this
+    }
+}
+
+/*
+ * ===================== P1 批次 9：keyboard =====================
+ * 键盘本身的接口没有所有权问题（全是存指针或枚举），真正要讲清楚的是**绑定关系**。
+ *
+ * ★★ 绑定是单向的，而且 LVGL 不清理它 —— 读实现确认：
+ *   lv_keyboard.c 没有任何 LV_EVENT_DELETE 处理；全文件唯一给 keyboard->ta 赋值的地方
+ *   就是 lv_keyboard_set_textarea；而 lv_textarea.c 完全不引用 keyboard。
+ *   按键处理却直接解引用 keyboard->ta。
+ *   ⇒ **删除 textarea 之前必须先解绑**（clearTextarea），否则之后任何一次按键
+ *     都会踩悬空指针，且崩溃发生在 LVGL 的事件回调里 —— 本层没有拦截的位置。
+ *   这是"契约能挡住的、代码挡不住"的典型情况，所以把它写在最显眼处。
+ */
+
+/// 软键盘
+public class LvKeyboard <: LvObject {
+    private init(h: Int64) {
+        super(h)
+    }
+
+    /**
+     * 创建一个 keyboard。创建后需 setTextarea 才能真正输入。
+     *
+     * @throws[LvglException] 同 LvSwitch.create
+     */
+    public static func create(parent: LvObject): LvKeyboard {
+        ensureLvglOwnership()
+        let h = unsafe { lvglcj_keyboard_create(parent.handle) }
+        if (h <= 0) {
+            throw LvglException(OutOfMemory, "keyboard 创建失败（LVGL 内存池已满，或未启动显示导致没有默认屏幕）")
+        }
+        return LvKeyboard(h)
+    }
+
+    /**
+     * 绑定输入目标。
+     *
+     * ★★ **删除 textarea 之前必须先 clearTextarea()。**
+     *   LVGL 不会在 textarea 被删时清理这个绑定（键盘持有裸指针，而被绑方不知道
+     *   自己被绑了），按键处理会直接解引用它 —— 删掉 textarea 再按键就是踩悬空指针，
+     *   崩溃点在 LVGL 的事件回调里，本层无法拦截。
+     *
+     * 参数类型是 `LvTextarea` 而不是 `LvObject`：LVGL 对这一处有类断言，
+     * 传错类型会直接中止。用类型把这条约束放到编译期，比写文档提醒可靠。
+     *
+     * @throws[LvglException] 句柄失效等
+     */
+    public func setTextarea(ta: LvTextarea): LvKeyboard {
+        throwIfError(unsafe { lvglcj_keyboard_set_textarea(handle, ta.handle) }, "keyboard.setTextarea")
+        return this
+    }
+
+    /**
+     * 解绑当前输入目标。删除 textarea 之前必须调用（见 setTextarea 的说明）。
+     *
+     * @throws[LvglException] 句柄失效
+     */
+    public func clearTextarea(): LvKeyboard {
+        throwIfError(unsafe { lvglcj_keyboard_set_textarea(handle, 0) }, "keyboard.clearTextarea")
+        return this
+    }
+
+    /**
+     * 当前绑定的输入目标；未绑定时为 `None`。
+     *
+     * @throws[LvglException] 句柄失效
+     */
+    public func textarea(): Option<LvTextarea> {
+        let h = unsafe { lvglcj_keyboard_get_textarea(handle) }
+        if (h < 0) {
+            throw LvglException(InvalidArgument, "keyboard.textarea 失败")
+        }
+        if (h == 0) {
+            return None
+        }
+        /* 这里包装的是一个**已存在**的 textarea，不能走 create（那会新建对象），
+         * 故走 LvTextarea 的同包包装入口。若该 textarea 已被删除，
+         * 拿到的是它那个已失效的句柄，对其操作会照常报错 —— 这正是想要的。 */
+        return Some(LvTextarea.fromExistingHandle(h))
+    }
+
+    /**
+     * 设置键盘布局模式。
+     *
+     * @throws[LvglException] InvalidArgument —— 取值越界（合法 0..7）
+     */
+    public func setMode(mode: Int32): LvKeyboard {
+        throwIfError(unsafe { lvglcj_keyboard_set_mode(handle, mode) }, "keyboard.setMode")
+        return this
+    }
+
+    /**
+     * 当前模式（取值见 LVGLCJ_KEYBOARD_MODE_*）
+     *
+     * @throws[LvglException] InvalidArgument —— 句柄失效
+     */
+    public func mode(): Int32 {
+        let m = unsafe { lvglcj_keyboard_get_mode(handle) }
+        if (m < 0) {
+            throw LvglException(InvalidArgument, "keyboard.mode 失败")
+        }
+        return m
+    }
+
+    /// 按键弹出预览
+    public func setPopovers(on: Bool): LvKeyboard {
+        throwIfError(unsafe { lvglcj_keyboard_set_popovers(handle, if (on) {
+            1
+        } else {
+            0
+        }) }, "keyboard.setPopovers")
         return this
     }
 }

@@ -535,6 +535,36 @@ foreign func lvglcj_table_clear_cell_ctrl(tbl: Int64, row: Int32, col: Int32, ct
 public let LVGLCJ_TABLE_CTRL_MERGE_RIGHT: Int32 = 1
 public let LVGLCJ_TABLE_CTRL_TEXT_CROP: Int32 = 2
 
+/* ---------------- P1 批次 9：keyboard ----------------
+ *
+ * ★★ 生命周期契约：LVGL 不清理 keyboard→textarea 的绑定
+ *   （lv_keyboard.c 无 LV_EVENT_DELETE 处理，lv_textarea.c 也不引用 keyboard），
+ *   而按键处理会解引用 keyboard->ta。因此**删除 textarea 前必须先解绑**
+ *   （setTextarea 传空 / clearTextarea），否则之后按键会踩悬空指针 ——
+ *   崩溃点在 LVGL 的事件回调里，本层没有拦截的位置。
+ *
+ * ★ get_textarea 返回**句柄**（反查所得），不是裸指针：即使被绑对象已删除，
+ *   拿到的也是它那个会正常报错的失效句柄。未绑定返回 LVGLCJ_HANDLE_NULL。
+ */
+foreign func lvglcj_keyboard_create(parent: Int64): Int64
+
+foreign func lvglcj_keyboard_set_textarea(kb: Int64, ta: Int64): Int32
+
+foreign func lvglcj_keyboard_get_textarea(kb: Int64): Int64
+
+foreign func lvglcj_keyboard_set_mode(kb: Int64, mode: Int32): Int32
+
+foreign func lvglcj_keyboard_get_mode(kb: Int64): Int32
+
+foreign func lvglcj_keyboard_set_popovers(kb: Int64, on: Int32): Int32
+
+/* 模式取值，与 native/include/lvglcj_bridge.h 的 LVGLCJ_KEYBOARD_MODE_* 对应。
+ * ★ TEXT_ARABIC 只在编译期打开 LV_USE_ARABIC_PERSIAN_CHARS 时存在，本项目未开。 */
+public let LVGLCJ_KEYBOARD_MODE_TEXT_LOWER: Int32 = 0
+public let LVGLCJ_KEYBOARD_MODE_TEXT_UPPER: Int32 = 1
+public let LVGLCJ_KEYBOARD_MODE_SPECIAL: Int32 = 2
+public let LVGLCJ_KEYBOARD_MODE_NUMBER: Int32 = 3
+
 /* ---------------- Canvas（§3.11.2）：自定义绘制的唯一出口 ----------------
  *
  * ★ 颜色参数的**解释方式在不同函数上不同**，调用方必须看清：

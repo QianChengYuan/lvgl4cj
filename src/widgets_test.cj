@@ -540,6 +540,61 @@ class WidgetTests {
         rt.deinitLvgl()
     }
 
+    // ==================================================== 十四、P1 批次 9：keyboard
+
+    /*
+     * keyboard 的接口本身没有所有权问题，本用例要钉的是**绑定关系**这条契约：
+     *   LVGL 不会在 textarea 被删时清理 keyboard→textarea 的绑定（键盘持有裸指针，
+     *   被绑方完全不知道这件事），而按键处理会解引用它 —— 所以删除 textarea 之前
+     *   必须先解绑。本用例只走**安全顺序**；危险顺序是契约禁止的，写成用例就等于
+     *   让测试自己去踩悬空指针。
+     */
+    @TestCase
+    func testKeyboardBindingContractAndSafeTeardown(): Unit {
+        let rt = LvglRuntime()
+        let _ = rt.startHeadless(320, 240)
+        let kb = LvKeyboard.create(LvObject.screenActive())
+        let ta = LvTextarea.create(LvObject.screenActive())
+
+        /* 未绑定 → None（而不是造一个假对象或抛异常） */
+        @Assert(kb.textarea().isNone(), true)
+
+        kb.setTextarea(ta)
+        @Assert(kb.textarea().isSome(), true)
+        /* ★ 用**行为**验证"取回的是同一个对象"，而不是比较句柄数字：
+         *   对取回的对象写一次，再看原对象是否变了 —— 这比比数字更能说明问题，
+         *   也不依赖句柄的内部表示（测试在独立包内，句柄字段未必可见）。 */
+        kb.textarea().getOrThrow().setText("typed")
+        @Assert(ta.text(), "typed")
+
+        /* 类型系统挡住的：setTextarea 只收 LvTextarea，传别的对象编译不过 */
+        kb.setMode(LVGLCJ_KEYBOARD_MODE_NUMBER)
+        @Assert(kb.mode(), LVGLCJ_KEYBOARD_MODE_NUMBER)
+        @Assert(throwsLvgl({=> kb.setMode(99) }), true)
+        kb.setPopovers(true)
+
+        /* 解绑：clearTextarea 之后回到 None */
+        kb.clearTextarea()
+        @Assert(kb.textarea().isNone(), true)
+
+        /* 失效句柄：绑定一个已删除的 textarea 必须抛错，而不是把悬空指针存进去 */
+        let holder = LvObject.create(LvObject.screenActive())
+        let ta2 = LvTextarea.create(holder)
+        holder.close()
+        @Assert(throwsLvgl({=> kb.setTextarea(ta2) }), true)
+        @Assert(kb.textarea().isNone(), true)
+
+        /* 安全顺序：先解绑、再删 textarea，之后键盘仍然可用 */
+        kb.setTextarea(ta)
+        kb.clearTextarea()
+        ta.close()
+        kb.setMode(LVGLCJ_KEYBOARD_MODE_TEXT_UPPER)
+        @Assert(kb.mode(), LVGLCJ_KEYBOARD_MODE_TEXT_UPPER)
+
+        kb.close()
+        rt.deinitLvgl()
+    }
+
     // ==================================================== 六、Canvas（§3.11.2）
 
     /*

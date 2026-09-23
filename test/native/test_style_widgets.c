@@ -767,6 +767,68 @@ int main(void)
         CHECK(lvglcj_handle_state(tb) != LVGLCJ_HSTATE_ALIVE, "删除后不再报告 ALIVE");
     }
 
+    /* ================================================== 7k. P1 批次 9：keyboard
+     *
+     * 键盘接口本身没有所有权问题，本段的重点是**绑定关系**：
+     *   · get_textarea 返回的是**句柄**（反查所得），与传入的 textarea 句柄一致；
+     *   · ta 传 0 表示解绑 —— 这是删除 textarea 之前必须做的一步（见 C 侧长注释）；
+     *   · 模式取值越界必须拦（LVGL 会拿它索引布局表）。
+     * 注意本段**只走安全顺序**（先解绑、再删），危险的顺序是契约禁止的，
+     * 不写成用例 —— 那会让测试自己踩悬空指针。
+     */
+    printf("\n-- 7k. P1 批次 9 控件（keyboard）--\n");
+    {
+        int64_t kb = lvglcj_keyboard_create(scr);
+        CHECK(kb != 0, "创建 keyboard");
+
+        int64_t ta = lvglcj_textarea_create(scr);
+        CHECK(ta != 0, "创建配套 textarea");
+
+        CHECK(lvglcj_keyboard_get_textarea(kb) == 0, "★ 未绑定时返回空句柄（不是错误码）");
+        CHECK(lvglcj_keyboard_set_textarea(kb, ta) == LVGLCJ_OK, "绑定 textarea");
+        CHECK(lvglcj_keyboard_get_textarea(kb) == ta,
+              "★ 取回的句柄与绑定的 textarea 一致（经 lvglcj_handle_of 反查）");
+
+        /* 默认模式：TEXT_LOWER */
+        CHECK(lvglcj_keyboard_get_mode(kb) == LVGLCJ_KEYBOARD_MODE_TEXT_LOWER, "默认模式为 TEXT_LOWER");
+        CHECK(lvglcj_keyboard_set_mode(kb, LVGLCJ_KEYBOARD_MODE_NUMBER) == LVGLCJ_OK, "切到 NUMBER");
+        CHECK(lvglcj_keyboard_get_mode(kb) == LVGLCJ_KEYBOARD_MODE_NUMBER, "★ 模式读回一致");
+        CHECK(lvglcj_keyboard_set_mode(kb, LVGLCJ_KEYBOARD_MODE_TEXT_UPPER) == LVGLCJ_OK, "切到 UPPER");
+        CHECK(lvglcj_keyboard_set_mode(kb, LVGLCJ_KEYBOARD_MODE_SPECIAL) == LVGLCJ_OK, "切到 SPECIAL");
+        CHECK(lvglcj_keyboard_set_mode(kb, LVGLCJ_KEYBOARD_MODE_USER_1) == LVGLCJ_OK, "切到 USER_1");
+        CHECK(lvglcj_keyboard_set_mode(kb, 8) == LVGLCJ_ERR_INVALID_ARGUMENT,
+              "★ 模式 8 被拒（TEXT_ARABIC 需编译期开关，本项目未开）");
+        CHECK(lvglcj_keyboard_set_mode(kb, 99) == LVGLCJ_ERR_INVALID_ARGUMENT,
+              "★ 越界模式被拒（LVGL 会拿它索引布局表）");
+        CHECK(lvglcj_keyboard_set_mode(kb, -1) == LVGLCJ_ERR_INVALID_ARGUMENT, "负模式被拒");
+
+        CHECK(lvglcj_keyboard_set_popovers(kb, 1) == LVGLCJ_OK, "开启按键预览");
+        CHECK(lvglcj_keyboard_set_popovers(kb, 0) == LVGLCJ_OK, "关闭按键预览");
+
+        /* 解绑：ta 传 0 */
+        CHECK(lvglcj_keyboard_set_textarea(kb, 0) == LVGLCJ_OK, "解绑（ta 传 0）");
+        CHECK(lvglcj_keyboard_get_textarea(kb) == 0, "★ 解绑后返回空句柄");
+
+        /* 失效句柄：绑定一个已删除的 textarea 必须报错，而不是把野指针存进去 */
+        int64_t holder = lvglcj_obj_create(scr);
+        int64_t ta2 = lvglcj_textarea_create(holder);
+        CHECK(lvglcj_obj_delete(holder) == LVGLCJ_OK, "删除父对象（连带删除 ta2）");
+        CHECK(lvglcj_handle_state(ta2) == LVGLCJ_HSTATE_INVALIDATED, "ta2 句柄已失效");
+        CHECK(lvglcj_keyboard_set_textarea(kb, ta2) < 0,
+              "★★ 绑定已失效的 textarea 被拒（否则等于把悬空指针存进键盘）");
+        CHECK(lvglcj_keyboard_get_textarea(kb) == 0, "★ 被拒后键盘仍处于未绑定状态");
+
+        /* 安全顺序：先解绑、再删 textarea */
+        CHECK(lvglcj_keyboard_set_textarea(kb, ta) == LVGLCJ_OK, "重新绑定");
+        CHECK(lvglcj_keyboard_set_textarea(kb, 0) == LVGLCJ_OK, "先解绑");
+        CHECK(lvglcj_obj_delete(ta) == LVGLCJ_OK, "再删除 textarea");
+        CHECK(lvglcj_keyboard_get_mode(kb) == LVGLCJ_KEYBOARD_MODE_USER_1,
+              "★ 解绑并删除 textarea 后键盘仍可用（模式仍可读）");
+
+        CHECK(lvglcj_obj_delete(kb) == LVGLCJ_OK, "删除 keyboard");
+        CHECK(lvglcj_handle_state(kb) != LVGLCJ_HSTATE_ALIVE, "删除后不再报告 ALIVE");
+    }
+
     /* ================================================== 8. 清理顺序 */
     printf("\n-- 8. 清理 --\n");
     /*

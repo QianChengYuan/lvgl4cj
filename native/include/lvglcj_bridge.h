@@ -763,6 +763,54 @@ int32_t lvglcj_table_get_column_count(int64_t tbl);
 int32_t lvglcj_table_add_cell_ctrl(int64_t tbl, int32_t row, int32_t col, int32_t ctrl);
 int32_t lvglcj_table_clear_cell_ctrl(int64_t tbl, int32_t row, int32_t col, int32_t ctrl);
 
+/* ============================================ 控件（P1 批次 9：keyboard）
+ *
+ * ★★ 绑定 textarea 的生命周期危险（读实现确认，不是推测）：
+ *      · lv_keyboard.c 里**没有**任何 LV_EVENT_DELETE 处理；
+ *      · 全文件唯一给 keyboard->ta 赋值的地方就是 lv_keyboard_set_textarea；
+ *      · lv_textarea.c **完全不引用** keyboard（textarea 不知道谁绑了它）；
+ *      · 而按键处理直接解引用 keyboard->ta。
+ *    结论：**删除 textarea 之前必须先解绑**，否则之后任何一次按键都会踩悬空指针
+ *    （崩溃点在 LVGL 的事件回调里，不在我们的包装函数里，因此本层无法"顺手拦一下"）。
+ *    本层不替调用方决定生命周期，故把它写成契约，并提供解绑入口（ta 传 0）。
+ *
+ * ★ 本批**不提供** lv_keyboard_set_map：自定义布局需要调用方长期持有
+ *   map/ctrl_map 两个数组（LVGL 只存指针），那要求一套"由我们持有"的机制，
+ *   与 canvas/line 同属一类问题，值得单独一轮做，而不是在这里顺手加半个。
+ *
+ * ★ 模式取值就是 LVGL 枚举的顺序值 0..7。注意 TEXT_ARABIC 只在编译期打开
+ *   LV_USE_ARABIC_PERSIAN_CHARS 时才存在 —— 本项目的构建没开，故不提供该取值。
+ */
+#define LVGLCJ_KEYBOARD_MODE_TEXT_LOWER 0
+#define LVGLCJ_KEYBOARD_MODE_TEXT_UPPER 1
+#define LVGLCJ_KEYBOARD_MODE_SPECIAL    2
+#define LVGLCJ_KEYBOARD_MODE_NUMBER     3
+#define LVGLCJ_KEYBOARD_MODE_USER_1     4
+#define LVGLCJ_KEYBOARD_MODE_USER_2     5
+#define LVGLCJ_KEYBOARD_MODE_USER_3     6
+#define LVGLCJ_KEYBOARD_MODE_USER_4     7
+#define LVGLCJ_KEYBOARD_MODE_MAX        7
+
+int64_t lvglcj_keyboard_create(int64_t parent);
+
+/* 绑定 textarea。ta == 0 表示**解绑**（合法操作，也是删除 textarea 前必须做的一步）。
+ * 注意 LVGL 会断言 ta 确实是 textarea 类 —— 传入别的对象会在断言打开时直接中止，
+ * 所以 L1 层用类型（setTextarea(LvTextarea)）来保证这一点，而不是靠调用方自觉。 */
+int32_t lvglcj_keyboard_set_textarea(int64_t kb, int64_t ta);
+
+/* 取绑定的 textarea 句柄；未绑定返回 LVGLCJ_HANDLE_NULL。
+ * 失败（键盘句柄失效等）返回负错误码 —— 与"未绑定"用不同的值表达。
+ * ★ 返回的是**句柄**而不是裸指针：即便被绑的 textarea 已被删除，
+ *   反查也会给出它那个已失效的句柄，调用方拿到的是一个会正常报错的东西。 */
+int64_t lvglcj_keyboard_get_textarea(int64_t kb);
+
+/* 模式。越界值必须拦下：LVGL 会拿它去索引布局表，越界就是读到界外。 */
+int32_t lvglcj_keyboard_set_mode(int64_t kb, int32_t mode);
+int32_t lvglcj_keyboard_get_mode(int64_t kb);
+
+/* 按键弹出预览 */
+int32_t lvglcj_keyboard_set_popovers(int64_t kb, int32_t on);
+
 /* ============================================================ §3.11.2 Canvas */
 int64_t lvglcj_canvas_create(int64_t parent);
 int32_t lvglcj_canvas_set_buffer(int64_t canvas, int32_t w, int32_t h);
