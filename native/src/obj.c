@@ -147,6 +147,28 @@ int32_t lvglcj_obj_set_size(int64_t obj, int32_t w, int32_t h)
     return LVGLCJ_OK;
 }
 
+/*
+ * 滚动。
+ *
+ * ★ 必须 LV_ANIM_OFF：带动画时滚动要若干帧才稳定，"滚一下再读回位置"就成了
+ *   时序赌局 —— 本项目已经在 roller 的选中值上踩过同一个坑（那里也是关动画）。
+ *
+ * 注：本入口**只提供** scroll_by，不把 get_scroll_y 做成 ABI —— 它与负错误码
+ *   共用同一取值空间（滚动量可以是任意 int32，含负值），无法用返回码区分成功与失败。
+ *   需要读当前滚动量的用例直接调 lv_obj_get_scroll_y（如 C 侧测试）。
+ *   顺带记一个**实测结论**（我先写错过）：`scrollBy(0, -60)` 之后
+ *   `lv_obj_get_scroll_y` 从 0 变成 **+60** —— 也就是"向下滚"是**变大**，
+ *   不是变小。（见 test_style_widgets 的 7l 段打印的 scroll_y。）
+ */
+int32_t lvglcj_obj_scroll_by(int64_t obj, int32_t dx, int32_t dy)
+{
+    LVGLCJ_HANDLE_GUARD(obj, __func__);
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    lv_obj_scroll_by((lv_obj_t *)lvglcj_ptr_of(obj), dx, dy, LV_ANIM_OFF);
+    return LVGLCJ_OK;
+}
+
 int32_t lvglcj_obj_set_parent(int64_t obj, int64_t parent)
 {
     LVGLCJ_HANDLE_GUARD(obj, __func__);

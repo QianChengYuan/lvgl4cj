@@ -110,6 +110,17 @@ static _Atomic int32_t g_in_pressed = 0;
 static _Atomic int32_t g_in_key = 0;
 static _Atomic int32_t g_in_key_pressed = 0;
 
+/*
+ * 滚轮累计格数（SDL 约定：正值 = 滚轮向上/远离用户）。
+ *
+ * 为什么是"累计 + 取走"而不是"直接喂给 indev"：
+ *   LVGL 的 encoder 型 indev 在**导航模式**下把 enc_diff 送去 lv_group_focus_prev/next
+ *   （移动焦点），并不会滚动视图（见 lv_indev.c）。所以滚轮不能走 indev，
+ *   只能由调用方取走后调用 lv_obj_scroll_by。这里负责把两次读之间的多格累积起来，
+ *   否则快速滚动会丢格。
+ */
+static _Atomic int32_t g_in_wheel_steps = 0;
+
 /* ------------------------------------------------------------ 工具 */
 
 /* 有界等待渲染完成。返回 0 = 被唤醒，-1 = 超时 */
@@ -736,8 +747,25 @@ int32_t lvglcj_sdl2_poll_events(void)
                 atomic_store(&g_paused, 0);
             }
         } else if (ev.type == SDL_MOUSEMOTION) {
-            atomic_store(&g_in_x, ev.motion.x);
-            atomic_store(&g_in_y, ev.motion.y);
+            /*
+             * ★ 坐标钳到窗口内。实测在 WSLg 上会收到**窗口外的坐标**
+             *   （LVGL 侧日志里成百条 "X is 2479 > 800"），那会让画面自己滚动 ——
+             *   表现是"界面在抖"。坐标本来就该在窗口内，越界值只可能是
+             *   平台/缩放造成的，钳制比照单全收安全。
+             */
+            int mx = ev.motion.x;
+            int my = ev.motion.y;
+            int ww = 0;
+            int wh = 0;
+            SDL_GetWindowSize(g_window, &ww, &wh);
+            if (ww > 0 && wh > 0) {
+                if (mx < 0) mx = 0;
+                if (my < 0) my = 0;
+                if (mx >= ww) mx = ww - 1;
+                if (my >= wh) my = wh - 1;
+            }
+            atomic_store(&g_in_x, mx);
+            atomic_store(&g_in_y, my);
         } else if (ev.type == SDL_MOUSEBUTTONDOWN) {
             atomic_store(&g_in_x, ev.button.x);
             atomic_store(&g_in_y, ev.button.y);
@@ -752,10 +780,48 @@ int32_t lvglcj_sdl2_poll_events(void)
         } else if (ev.type == SDL_KEYUP) {
             atomic_store(&g_in_key, (int32_t)ev.key.keysym.sym);
             atomic_store(&g_in_key_pressed, 0);
+        } else if (ev.type == SDL_MOUSEWHEEL) {
+            /*
+             * 滚轮：只做**累积**，不做解释。
+             *   · SDL 约定 y > 0 = 滚轮向上（远离用户）；
+             *   · 某些平台/触控板的"自然滚动"会置 FLIPPED，此时要取反，
+             *     否则同一台机器上滚轮方向会和系统设置相反；
+             *   · 累积而不是覆盖：两次读之间来了两格就记两格，不然快速滚会丢。
+             * 由调用方（示例的读回调）取走后调用 lv_obj_scroll_by —— 原因见
+             * g_in_wheel_steps 上方的说明（LVGL 的滚轮通路只切焦点）。
+             */
+            int32_t dy = ev.wheel.y;
+            if (ev.wheel.direction == SDL_MOUSEWHEEL_FLIPPED) {
+                dy = -dy;
+            }
+            if (dy != 0) {
+                atomic_fetch_add(&g_in_wheel_steps, dy);
+            }
         }
     }
 
     return atomic_load(&g_quit_requested) ? 1 : 0;
+}
+
+/*
+ * 取走累计的滚轮格数（取走后清零）。
+ * 只在 LVGL 线程里调（示例在 indev 读回调里调）——"取走"是读-改-写，
+ * 由单线程调用才不会被吞格。
+ */
+int32_t lvglcj_sdl2_take_wheel_steps(void)
+{
+    /*
+     * ★ 用 exchange 而不是"先 load 再 store"：后者在两次调用之间可能丢掉
+     *   主线程刚加上的一格（快速滚动时会丢格，且只在特定时序下出现）。
+     */
+    return atomic_exchange(&g_in_wheel_steps, 0);
+}
+
+/* 测试注入：绕过 SDL，直接把滚轮格数塞进去（与 set_render_suppressed 同类的钩子）。 */
+int32_t lvglcj_sdl2_inject_wheel(int32_t steps)
+{
+    atomic_fetch_add(&g_in_wheel_steps, steps);
+    return LVGLCJ_OK;
 }
 
 int32_t lvglcj_sdl2_feed_indev(void)

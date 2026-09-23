@@ -652,6 +652,43 @@ class WidgetTests {
         rt.deinitLvgl()
     }
 
+    // ==================================================== 十五、滚动（滚轮的落点）
+
+    /*
+     * 这一批加的是 `LvObject.scrollBy` —— 滚轮之所以需要它：LVGL 的滚轮（encoder 型
+     * indev）在导航模式下只**移动焦点**，指针通路只认拖动，库里没有"滚轮滚动视图"的
+     * 原生通路，所以由后端收 SDL_MOUSEWHEEL、调用方显式滚动。
+     *
+     * ★ 用例强度的说明（不夸大）：L1 侧**读不到**滚动位置 —— 本层刻意没把
+     *   get_scroll_y 做成 ABI（它与负错误码共用取值空间，无法用返回码区分成败）。
+     *   所以这里只能钉住"调用契约"（合法句柄不抛、失效句柄抛），
+     *   而"滚了多少、方向对不对"由 C 侧的 7l 段用 lv_obj_get_scroll_y 直接量。
+     *   把它们分开写，是为了不把"没验证的东西"包装成已验证。
+     */
+    @TestCase
+    func testScrollByContract(): Unit {
+        let rt = LvglRuntime()
+        let _ = rt.startHeadless(320, 240)
+        let box = LvObject.create(LvObject.screenActive())
+        box.setSize(200, 100)
+        let inner = LvObject.create(box)
+        inner.setSize(200, 500) /* 超出容器 → 可滚动 */
+
+        /* 合法句柄：滚动成功，且内容没超出时也只是被钳制、不抛错 */
+        box.scrollBy(0, -60)
+        box.scrollBy(0, 60)
+        box.scrollBy(0, -100000) /* 远超内容高度：钳制，不抛错 */
+
+        /* 失效句柄：必须抛错（而不是静默什么都不做） */
+        let holder = LvObject.create(LvObject.screenActive())
+        let other = LvObject.create(holder)
+        holder.close()
+        @Assert(throwsLvgl({=> other.scrollBy(0, -10) }), true)
+
+        box.close()
+        rt.deinitLvgl()
+    }
+
     // ==================================================== 六、Canvas（§3.11.2）
 
     /*

@@ -265,6 +265,10 @@ foreign func lvglcj_sdl2_wait_timeout_count(): Int32
  * 非 0 = 某次 flush 的等待被提前满足过，那条带的内容不会再被重画（画面残留旧像素）。 */
 foreign func lvglcj_sdl2_stale_apply_count(): Int32
 
+/* 取走累计的滚轮格数（取走后清零；正值 = 滚轮向上）。
+ * ★ 滚轮不走 indev：LVGL 的 encoder 在导航模式下只移动焦点，不滚动视图。 */
+foreign func lvglcj_sdl2_take_wheel_steps(): Int32
+
 foreign func lvglcj_sdl2_is_paused(): Int32
 
 foreign func lvglcj_sdl2_is_render_thread(): Int32
@@ -279,6 +283,9 @@ foreign func lvglcj_obj_delete(obj: Int64): Int32
 foreign func lvglcj_obj_clean(obj: Int64): Int32
 
 foreign func lvglcj_obj_get_child_count(obj: Int64): Int32
+/* 相对滚动（像素）。滚轮之所以经由它实现：LVGL 的滚轮（encoder）在导航模式下
+ * 只**移动焦点**，指针通路只认拖动；所以"滚轮滚动"必须显式调用滚动接口。 */
+foreign func lvglcj_obj_scroll_by(obj: Int64, dx: Int32, dy: Int32): Int32
 
 foreign func lvglcj_obj_add_event(obj: Int64, code: Int32, cid: Int32): Int64
 

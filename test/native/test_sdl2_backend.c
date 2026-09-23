@@ -276,6 +276,22 @@ int main(void)
         lvglcj_sdl2_poll_events();
     }
 
+    /* ============================================ ★ 滚轮：累计 + 取走
+     *
+     * 滚轮不走 indev（LVGL 的 encoder 在导航模式下只移动焦点，不滚动视图），
+     * 所以后端只做两件事：**累计**两次读之间的格数、被取走时清零。
+     * 这里钉住的就是这两条 —— 尤其是"两格之间要累加"与"取走后不重复消费"：
+     * 少了前者，快速滚动会丢格；少了后者，一格会被反复消费成"一直滚"。
+     */
+    printf("\n-- ★ 滚轮：累计后取走，取走后清零 --\n");
+    {
+        CHECK(lvglcj_sdl2_take_wheel_steps() == 0, "初始没有累计格数");
+        CHECK(lvglcj_sdl2_inject_wheel(3) == LVGLCJ_OK, "注入 3 格");
+        CHECK(lvglcj_sdl2_inject_wheel(-1) == LVGLCJ_OK, "再注入 -1 格（中间未取走 → 应累加）");
+        CHECK(lvglcj_sdl2_take_wheel_steps() == 2, "★ 取走 3 + (-1) = 2 格");
+        CHECK(lvglcj_sdl2_take_wheel_steps() == 0, "★ 取走后清零（同一格不被重复消费）");
+    }
+
     /* ============================================ ★ 残留额度不得让下一次 flush 提前返回
      *
      * 额度是**单标志（合并语义，不计数）**，sdl2_wait_done 上方的注释写明它成立的前提是

@@ -903,6 +903,45 @@ int main(void)
         CHECK(lvglcj_handle_state(ch) != LVGLCJ_HSTATE_ALIVE, "删除后不再报告 ALIVE");
     }
 
+    /* ================================================== 7l. 滚动（滚轮的落点）
+     *
+     * 滚轮之所以要有它：LVGL 的滚轮（encoder 型 indev）在导航模式下走的是
+     * lv_group_focus_prev/next —— **移动焦点，不滚动视图**；指针通路只认拖动。
+     * 所以"滚轮滚动"只能由调用方显式调用滚动接口实现。
+     *
+     * 这里钉住的是：滚动真的生效、滚多少就是多少、反向滚能回到原位、且
+     * **不带动画**（带动画时"滚完立刻读"拿到的是中间值，那是 roller 那批的教训）。
+     * 符号约定不硬写死：正负都试一次并核对"绝对值 = 设定值"，
+     * 这样约定若将来变了，用例仍能指出"变了多少"而不是只报一句失败。
+     */
+    printf("\n-- 7l. 滚动（滚轮的落点）--\n");
+    {
+        int64_t box = lvglcj_obj_create(scr);
+        CHECK(lvglcj_obj_set_size(box, 200, 100) == LVGLCJ_OK, "容器 200x100");
+        int64_t inner = lvglcj_obj_create(box);
+        CHECK(lvglcj_obj_set_size(inner, 200, 500) == LVGLCJ_OK,
+              "内容 200x500（超出容器，可滚动）");
+        lv_obj_update_layout((lv_obj_t *)lvglcj_ptr_of(box));
+
+        int32_t y0 = (int32_t)lv_obj_get_scroll_y((lv_obj_t *)lvglcj_ptr_of(box));
+        CHECK(lvglcj_obj_scroll_by(box, 0, -60) == LVGLCJ_OK, "朝一个方向滚 60 px");
+        int32_t y1 = (int32_t)lv_obj_get_scroll_y((lv_obj_t *)lvglcj_ptr_of(box));
+        printf("        （scroll_y: %d → %d）\n", (int)y0, (int)y1);
+        CHECK(y1 != y0, "★ 滚动生效（位置确实变了）");
+        CHECK((y1 - y0 == 60) || (y1 - y0 == -60),
+              "★ 滚多少就是多少（位移 60 px，符号随 LVGL 约定）");
+
+        CHECK(lvglcj_obj_scroll_by(box, 0, 60) == LVGLCJ_OK, "反向滚 60 px");
+        int32_t y2 = (int32_t)lv_obj_get_scroll_y((lv_obj_t *)lvglcj_ptr_of(box));
+        CHECK(y2 == y0, "★ 反向滚动回到原位（说明没有累积漂移）");
+
+        /* 内容没超出时滚动被钳制：这是 LVGL 的既有行为，本层如实透传而不是报错 */
+        CHECK(lvglcj_obj_scroll_by(scr, 0, -100) == LVGLCJ_OK,
+              "★ 不可滚动的对象上滚动不报错（钳制，与 LVGL 行为一致）");
+
+        CHECK(lvglcj_obj_delete(box) == LVGLCJ_OK, "删除容器");
+    }
+
     /* ================================================== 8. 清理顺序 */
     printf("\n-- 8. 清理 --\n");
     /*

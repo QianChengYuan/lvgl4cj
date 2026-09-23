@@ -106,6 +106,20 @@ public class Sdl2Backend {
         unsafe { lvglcj_sdl2_stale_apply_count() }
     }
 
+    /**
+     * 取走自上次调用以来累计的滚轮格数（取走后清零）。正值 = 滚轮向上。
+     *
+     * ★ 它**取代**了"把滚轮喂给 indev"这种做法：读 LVGL 的 lv_indev.c 可见，
+     *   encoder 型 indev 的 `enc_diff` 在导航模式下走的是 `lv_group_focus_prev/next`
+     *   —— **移动焦点，不滚动视图**。所以滚轮只能由调用方取走后自行滚动，
+     *   例如在 indev 读回调里：`let w = backend.takeWheelSteps(); w != 0 && root.scrollBy(0, w * 96)`。
+     *
+     * 必须在**同一条线程**上消费（示例是 LVGL 线程的读回调）——"取走"是读-改-写。
+     */
+    public func takeWheelSteps(): Int32 {
+        unsafe { lvglcj_sdl2_take_wheel_steps() }
+    }
+
     /// 窗口是否已关闭/最小化（此时后端暂停渲染并立即放行等待方）
     public func isPaused(): Bool {
         unsafe { lvglcj_sdl2_is_paused() } != 0

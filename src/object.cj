@@ -108,6 +108,23 @@ public open class LvObject {
         return this
     }
 
+    /**
+     * 相对当前滚动位置滚动（像素）。内容没超出时会被钳制，**不抛错**。
+     *
+     * 正值 `dy` = 内容向下移动（看到更靠上的内容），与 LVGL 的 `lv_obj_scroll_by` 一致。
+     * 滚动过程**不带动画**，调用返回后位置立即稳定 —— 因此"滚一下再读"是确定性的。
+     *
+     * ★ 这个方法也是滚轮的落点：LVGL 的滚轮（encoder 型 indev）在导航模式下走的是
+     *   `lv_group_focus_prev/next`（**移动焦点**），指针通路只认拖动 —— 库里没有
+     *   "滚轮滚动视图"的原生通路，所以由后端收 `SDL_MOUSEWHEEL`、调用方显式滚动。
+     *
+     * @throws[LvglException] 句柄失效
+     */
+    public func scrollBy(dx: Int32, dy: Int32): LvObject {
+        throwIfError(unsafe { lvglcj_obj_scroll_by(handle, dx, dy) }, "scrollBy")
+        return this
+    }
+
     public func align(a: LvAlign, xOfs!: Int32 = 0, yOfs!: Int32 = 0): LvObject {
         throwIfError(unsafe { lvglcj_obj_align(handle, lvAlignToInt(a), xOfs, yOfs) }, "align")
         return this

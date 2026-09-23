@@ -464,16 +464,27 @@ main(args: Array<String>) {
             .start()
     }
 
-    /* pointer indev：读回调把 SDL 采集到的鼠标状态喂给 LVGL */
+    /*
+     * pointer indev：读回调把 SDL 采集到的鼠标状态喂给 LVGL。
+     *
+     * ★ 滚轮也在这里消费，但**不是喂给 indev**：读 LVGL 的 lv_indev.c 可见，
+     *   encoder 型 indev 的 `enc_diff` 在导航模式下走的是 `lv_group_focus_prev/next`
+     *   —— 只**移动焦点**，不滚动视图。所以滚轮取走后显式滚动，这才是它唯一的落点。
+     *   每格 96 px（示例里一张卡片的高度）；滚动关动画，因此"滚完立刻读"是确定性的。
+     */
     let indev = LvIndev.create(LvIndevType.Pointer).bind(disp)
     indev.onRead {
         backend.feedIndev()
+        let wheel = backend.takeWheelSteps()
+        if (wheel != 0) {
+            root.scrollBy(0, wheel * 96)
+        }
     }
 
     /* 启动 C 侧主循环线程；此后主线程只负责 SDL 事件循环 */
     rt.startThreaded()
 
-    println("[gallery_cj] 窗口已启动：19 个控件分 11 张卡片；按住鼠标拖动可滚动")
+    println("[gallery_cj] 窗口已启动：19 个控件分 11 张卡片；滚轮或按住鼠标拖动均可滚动")
     /*
      * ★ 先把噪音解释掉，免得它看起来像故障：
      *   「font A/B」那张卡片的**上行是故意用内置 CJK 字体**画的，

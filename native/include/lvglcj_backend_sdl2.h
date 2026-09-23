@@ -66,6 +66,14 @@ int32_t lvglcj_sdl2_poll_events(void);
  */
 int32_t lvglcj_sdl2_feed_indev(void);
 
+/* 取走累计的滚轮格数（取走后清零；SDL 约定正值 = 滚轮向上）。
+ * ★ 滚轮不走 indev：LVGL 的 encoder 在导航模式下只移动焦点，不滚动视图。
+ *   所以后端只负责累积，由调用方取走后调 lv_obj_scroll_by。 */
+int32_t lvglcj_sdl2_take_wheel_steps(void);
+
+/* 测试注入：绕过 SDL 直接塞入滚轮格数（与 set_render_suppressed 同类的钩子）。 */
+int32_t lvglcj_sdl2_inject_wheel(int32_t steps);
+
 /* ---------------------------------------------------------- 观测（测试/断言用） */
 int32_t lvglcj_sdl2_flush_count(void);        /* flush sink 被调用次数 */
 int32_t lvglcj_sdl2_present_count(void);      /* 真正 Present 的次数 */

@@ -15,6 +15,7 @@
  *   非黑像素很多但色值不对     → 像素格式/通道顺序不对
  */
 #include <X11/Xlib.h>
+#include <unistd.h>
 /* ★ XGetPixel / XDestroyImage 声明在 Xutil.h，不在 Xlib.h。
  *   少这个头只会得到一条 implicit declaration 告警，然后在**链接**阶段失败 ——
  *   与之前 C 侧踩过的「隐式声明截断指针」是同一类问题。 */
@@ -78,6 +79,15 @@ static unsigned int chan_of(unsigned long p, unsigned long mask)
     return (unsigned int)((p & mask) >> s);
 }
 
+/*
+ * 端到端注入滚轮用。XTest 在 **X 服务端**注入，等价于真的动了滚轮 ——
+ * 注意不能用 XSendEvent：SDL2 走 XInput2 收输入，合成的客户端事件它收不到。
+ * 手写原型是为了不依赖 libXtst 的开发头（本机只有运行库 libXtst.so.6）。
+ */
+extern int XTestFakeButtonEvent(Display *dpy, unsigned int button, int is_press,
+                                unsigned long delay);
+extern int XTestFakeMotionEvent(Display *dpy, int screen, int x, int y, unsigned long delay);
+
 int main(int argc, char **argv)
 {
     Display *d = XOpenDisplay(NULL);
@@ -98,6 +108,44 @@ int main(int argc, char **argv)
         XCloseDisplay(d);
         return 3;
     }
+    /*
+     * 可选：注入滚轮（argv[2] = 格数，负 = 向上；argv[3] = 注入后等待毫秒，默认 400）。
+     * 用于端到端验证"滚轮是否真的让画面滚动"：注入后等一会儿再抓图，
+     * 用 scripts/check_ui.py 比较卡片带的位置即可判断（位置动了就是真的滚了）。
+     */
+    if (argc >= 3) {
+        int clicks = atoi(argv[2]);
+        int wait_ms = (argc >= 4) ? atoi(argv[3]) : 400;
+        int n = clicks < 0 ? -clicks : clicks;
+        unsigned int btn = (clicks > 0) ? 5u : 4u; /* X: 5 = 向下滚，4 = 向上滚 */
+
+        /*
+         * 先把指针移进窗口：XTest 的按键事件落在**指针当前位置**，
+         * 指针若在窗口外，滚轮就滚到别处去了。
+         */
+        Window child;
+        int rx = 0;
+        int ry = 0;
+        if (XTranslateCoordinates(d, target, DefaultRootWindow(d), at.width / 2, at.height / 2,
+                                  &rx, &ry, &child)) {
+            XTestFakeMotionEvent(d, -1, rx, ry, 0);
+        }
+        XSetInputFocus(d, target, RevertToParent, CurrentTime);
+        XFlush(d);
+        usleep(60 * 1000);
+
+        for (int i = 0; i < n; i++) {
+            XTestFakeButtonEvent(d, btn, 1, 0);
+            XTestFakeButtonEvent(d, btn, 0, 0);
+            XFlush(d);
+        }
+        printf("已注入 %d 次滚轮（%s），等待 %d ms 后抓图\n", n, clicks > 0 ? "向下" : "向上",
+               wait_ms);
+        if (wait_ms > 0) {
+            usleep(wait_ms * 1000);
+        }
+    }
+
     XImage *im = XGetImage(d, target, 0, 0, (unsigned int)at.width, (unsigned int)at.height,
                            AllPlanes, ZPixmap);
     if (im == NULL) {
