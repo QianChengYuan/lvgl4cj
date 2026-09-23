@@ -654,6 +654,38 @@ int32_t lvglcj_image_set_offset(int64_t img, int32_t x, int32_t y);
  * 传 100 会得到约 39% —— 这是 LVGL 的既有约定，此处如实透传并显式校验 0。 */
 int32_t lvglcj_image_set_scale(int64_t img, int32_t zoom);
 
+/* ============================================ 控件（P1 批次 6：roller）
+ *
+ * ★ 所有权：**两种模式都会拷贝选项串**（读实现确认，与直觉相反）：
+ *     · NORMAL   模式走 lv_label_set_text，label 是拷贝语义；
+ *     · INFINITE 模式自己按 inf_page_cnt 复制出重复串（lv_malloc）。
+ *   所以"无限模式大概要调用方保活这份字符串"这个直觉是错的 —— 传临时串安全。
+ *
+ * ★ 与 image 相反：**options == NULL 不是"清空"而是错误**。
+ *   实现里有 LV_ASSERT_NULL(options)，放过去会在 LVGL 内部直接断言。
+ *   （清空 roller 的选项没有语义；要"空"就传一个不含 '\n' 的串。）
+ */
+#define LVGLCJ_ROLLER_MODE_NORMAL   0
+#define LVGLCJ_ROLLER_MODE_INFINITE 1
+
+int64_t lvglcj_roller_create(int64_t parent);
+
+/* 设置选项。options 为 '\n' 分隔（与 dropdown 同一约定）。
+ * mode 取 LVGLCJ_ROLLER_MODE_*；越界值被拒。 */
+int32_t lvglcj_roller_set_options(int64_t roller, const char *options, int32_t mode);
+
+/* 选中第 sel 项（0 基）。
+ * ★ 本层**必须**校验范围：底层 lv_roller_set_selected 收 uint32_t 且不自行钳制，
+ *   越界不会断言，而是把内部 id 设成越界值，随后渲染/取串会读到界外。
+ *   故这里按选项数校验，负值与非 int32 转换同样拦下（负数转 uint32 会变成巨大索引）。 */
+int32_t lvglcj_roller_set_selected(int64_t roller, int32_t sel);
+
+/* 返回当前选中索引；失败返回负的错误码 */
+int32_t lvglcj_roller_get_selected(int64_t roller);
+
+/* 可见行数。0 会得到一个零高度的控件，没有语义，拦下 */
+int32_t lvglcj_roller_set_visible_row_count(int64_t roller, int32_t rows);
+
 /* ============================================================ §3.11.2 Canvas */
 int64_t lvglcj_canvas_create(int64_t parent);
 int32_t lvglcj_canvas_set_buffer(int64_t canvas, int32_t w, int32_t h);

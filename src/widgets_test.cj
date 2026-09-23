@@ -374,6 +374,51 @@ class WidgetTests {
         rt.deinitLvgl()
     }
 
+    // ==================================================== 十一、P1 批次 6：roller
+
+    /*
+     * roller 值得单独测的点，都不是"能不能滚"，而是三条读实现才确认的语义：
+     *   · 两种模式都拷贝选项串（"无限模式要外部保活"是错的）；
+     *   · options == NULL 是错误（与 image 的 NULL 表示清空正好相反）；
+     *   · 选中索引必须本层校验，且校验基准在两种模式下都是**对外选项数**。
+     */
+    @TestCase
+    func testRollerOptionOwnershipAndBounds(): Unit {
+        let rt = LvglRuntime()
+        let _ = rt.startHeadless(320, 240)
+        let ro = LvRoller.create(LvObject.screenActive())
+
+        /* 传临时构造的 String 是安全的（两种模式都拷贝） */
+        ro.setOptions("One\nTwo\nThree")
+        @Assert(ro.selected(), 0)
+        ro.setSelected(2)
+        @Assert(ro.selected(), 2)
+
+        /* 越界与负值必须被拦：底层不钳制，放行后失败点会离调用点很远 */
+        @Assert(throwsLvgl({=> ro.setSelected(3) }), true)
+        @Assert(throwsLvgl({=> ro.setSelected(-1) }), true)
+
+        ro.setVisibleRowCount(3)
+        @Assert(throwsLvgl({=> ro.setVisibleRowCount(0) }), true)
+        @Assert(throwsLvgl({=> ro.setVisibleRowCount(-2) }), true)
+
+        /* 无限模式：对外索引语义与普通模式一致（校验基准是 get_option_count） */
+        ro.setOptionsInfinite("A\nB\nC")
+        ro.setSelected(1)
+        @Assert(ro.selected(), 1)
+        @Assert(throwsLvgl({=> ro.setSelected(3) }), true)
+
+        /* 失效句柄上操作必须抛错 */
+        let holder = LvObject.create(LvObject.screenActive())
+        let ro2 = LvRoller.create(holder)
+        ro2.setOptions("x\ny")
+        holder.close()
+        @Assert(throwsLvgl({=> ro2.setSelected(0) }), true)
+
+        ro.close()
+        rt.deinitLvgl()
+    }
+
     // ==================================================== 六、Canvas（§3.11.2）
 
     /*

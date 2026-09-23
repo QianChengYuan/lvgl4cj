@@ -518,6 +518,61 @@ int main(void)
         CHECK(lvglcj_handle_state(im) != LVGLCJ_HSTATE_ALIVE, "删除后不再报告 ALIVE");
     }
 
+    /* ================================================== 7h. P1 批次 6：roller
+     *
+     * 钉住三件读实现才知道的事：
+     *   ① 两种模式**都拷贝**选项串（NORMAL 走 label，INFINITE 自己复制后 lv_free），
+     *      所以传栈上临时串并在调用后覆写它是安全的；
+     *   ② options == NULL 是**错误**而不是"清空"（与 image 相反，实现里有断言）；
+     *   ③ 选中索引**须由本层校验**：底层收 uint32_t 且不钳制。
+     */
+    printf("\n-- 7h. P1 批次 6 控件（roller）--\n");
+    {
+        int64_t ro = lvglcj_roller_create(scr);
+        CHECK(ro != 0, "创建 roller");
+
+        char opts[32];
+        strcpy(opts, "One\nTwo\nThree");
+        CHECK(lvglcj_roller_set_options(ro, opts, LVGLCJ_ROLLER_MODE_NORMAL) == LVGLCJ_OK,
+              "设置选项（NORMAL）");
+        memset(opts, 0x5A, sizeof(opts)); /* 覆写调用方缓冲：钉住"拷贝"这条契约 */
+
+        CHECK(lvglcj_roller_get_selected(ro) == 0, "初始选中第 0 项");
+        CHECK(lvglcj_roller_set_selected(ro, 2) == LVGLCJ_OK, "选中第 2 项");
+        CHECK(lvglcj_roller_get_selected(ro) == 2,
+              "★ 读回一致（已关闭动画，设完即稳定，不是时序赌局）");
+        CHECK(lvglcj_roller_set_selected(ro, 3) == LVGLCJ_ERR_INVALID_ARGUMENT,
+              "★ 越界索引被拒（底层不钳制，必须由本层拦）");
+        CHECK(lvglcj_roller_set_selected(ro, -1) == LVGLCJ_ERR_INVALID_ARGUMENT,
+              "负索引被拒（转 uint32_t 会变成巨大索引）");
+        CHECK(lvglcj_roller_set_options(ro, NULL, LVGLCJ_ROLLER_MODE_NORMAL)
+                  == LVGLCJ_ERR_INVALID_ARGUMENT,
+              "★ options 为 NULL 被拒（与 image 的 NULL 表示清空 相反）");
+        CHECK(lvglcj_roller_set_options(ro, "A", 99) == LVGLCJ_ERR_INVALID_ARGUMENT,
+              "非法 mode 被拒");
+        CHECK(lvglcj_roller_set_visible_row_count(ro, 3) == LVGLCJ_OK, "可见 3 行");
+        CHECK(lvglcj_roller_set_visible_row_count(ro, 0) == LVGLCJ_ERR_INVALID_ARGUMENT,
+              "可见 0 行被拒");
+
+        /* 无限模式同样是拷贝，且对外选项数语义不变（get_option_count 会除回 inf_page_cnt） */
+        char opts2[32];
+        strcpy(opts2, "A\nB\nC");
+        CHECK(lvglcj_roller_set_options(ro, opts2, LVGLCJ_ROLLER_MODE_INFINITE) == LVGLCJ_OK,
+              "设置选项（INFINITE）");
+        memset(opts2, 0x5A, sizeof(opts2));
+        CHECK(lvglcj_roller_set_selected(ro, 1) == LVGLCJ_OK, "★ 无限模式下按对外索引选中");
+        CHECK(lvglcj_roller_set_selected(ro, 3) == LVGLCJ_ERR_INVALID_ARGUMENT,
+              "★ 无限模式下越界同样被拒（校验基准是对外选项数）");
+
+        int64_t holder = lvglcj_obj_create(scr);
+        int64_t ro2 = lvglcj_roller_create(holder);
+        CHECK(lvglcj_obj_delete(holder) == LVGLCJ_OK, "删除父对象");
+        CHECK(lvglcj_handle_state(ro2) == LVGLCJ_HSTATE_INVALIDATED, "★ roller 句柄级联失效");
+
+        CHECK(lvglcj_obj_delete(ro) == LVGLCJ_OK, "删除 roller");
+        CHECK(lvglcj_handle_state(ro) != LVGLCJ_HSTATE_ALIVE, "删除后不再报告 ALIVE");
+    }
+
     /* ================================================== 8. 清理顺序 */
     printf("\n-- 8. 清理 --\n");
     /*

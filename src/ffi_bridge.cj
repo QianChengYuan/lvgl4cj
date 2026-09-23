@@ -467,6 +467,21 @@ foreign func lvglcj_image_set_offset(img: Int64, x: Int32, y: Int32): Int32
 
 foreign func lvglcj_image_set_scale(img: Int64, zoom: Int32): Int32
 
+/* ---------------- P1 批次 6：roller ---------------- */
+foreign func lvglcj_roller_create(parent: Int64): Int64
+
+foreign func lvglcj_roller_set_options(roller: Int64, options: CString, mode: Int32): Int32
+
+foreign func lvglcj_roller_set_selected(roller: Int64, sel: Int32): Int32
+
+foreign func lvglcj_roller_get_selected(roller: Int64): Int32
+
+foreign func lvglcj_roller_set_visible_row_count(roller: Int64, rows: Int32): Int32
+
+/* 模式取值，与 native/include/lvglcj_bridge.h 的 LVGLCJ_ROLLER_MODE_* 对应 */
+public let LVGLCJ_ROLLER_MODE_NORMAL: Int32 = 0
+public let LVGLCJ_ROLLER_MODE_INFINITE: Int32 = 1
+
 /* ---------------- Canvas（§3.11.2）：自定义绘制的唯一出口 ----------------
  *
  * ★ 颜色参数的**解释方式在不同函数上不同**，调用方必须看清：

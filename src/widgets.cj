@@ -655,6 +655,93 @@ public class LvImage <: LvObject {
     }
 }
 
+/*
+ * ===================== P1 批次 6：roller =====================
+ * roller 的所有权语义又一次与直觉相反，记录了核对过程：
+ * 以为"无限模式要调用方保活这份选项串"，读实现后发现两种模式**都拷贝** ——
+ * NORMAL 走 lv_label_set_text，INFINITE 自己复制出重复串后立刻 lv_free。
+ * 同一份代码里 image 的 NULL 表示清空、roller 的 NULL 表示错误；
+ * image 是拷贝、canvas/line 是外部保活 —— 没有可外推的规律，只能逐个核对。
+ */
+
+/// 滚轮选择器（选项以 '\n' 分隔）
+public class LvRoller <: LvObject {
+    private init(h: Int64) {
+        super(h)
+    }
+
+    /**
+     * 创建一个 roller。创建后需 setOptions 才有内容。
+     *
+     * @throws[LvglException] 同 LvSwitch.create
+     */
+    public static func create(parent: LvObject): LvRoller {
+        ensureLvglOwnership()
+        let h = unsafe { lvglcj_roller_create(parent.handle) }
+        if (h <= 0) {
+            throw LvglException(OutOfMemory, "roller 创建失败（LVGL 内存池已满，或未启动显示导致没有默认屏幕）")
+        }
+        return LvRoller(h)
+    }
+
+    /**
+     * 设置选项（普通模式：滚到底即停）。选项以 `\n` 分隔。
+     *
+     * 选项串会被 LVGL 拷贝（两种模式都是），传入的 String 生命周期不受约束。
+     */
+    public func setOptions(options: String): LvRoller {
+        throwIfError(
+            withCString(options) {cs => unsafe { lvglcj_roller_set_options(handle, cs, LVGLCJ_ROLLER_MODE_NORMAL) }},
+            "roller.setOptions")
+        return this
+    }
+
+    /// 设置选项（无限模式：可一直滚）
+    public func setOptionsInfinite(options: String): LvRoller {
+        throwIfError(
+            withCString(options) {cs => unsafe { lvglcj_roller_set_options(handle, cs, LVGLCJ_ROLLER_MODE_INFINITE) }},
+            "roller.setOptionsInfinite")
+        return this
+    }
+
+    /**
+     * 选中第 sel 项（0 基）。
+     *
+     * 越界会抛 InvalidArgument —— 底层的 lv_roller_set_selected 收 uint32_t 且不钳制，
+     * 越界不报错而是把内部 id 设大，等渲染时才越界读，失败点离调用点很远。
+     * 选中过程**关闭动画**，因此 setSelected 返回后 selected() 立即是稳定值。
+     *
+     * @throws[LvglException] InvalidArgument —— 索引越界
+     */
+    public func setSelected(sel: Int32): LvRoller {
+        throwIfError(unsafe { lvglcj_roller_set_selected(handle, sel) }, "roller.setSelected")
+        return this
+    }
+
+    /**
+     * 当前选中索引（0 基）
+     *
+     * @throws[LvglException] InvalidArgument —— 句柄失效等导致读取失败
+     */
+    public func selected(): Int32 {
+        let r = unsafe { lvglcj_roller_get_selected(handle) }
+        if (r < 0) {
+            throw LvglException(InvalidArgument, "roller.selected 失败")
+        }
+        return r
+    }
+
+    /**
+     * 可见行数（须为正）。
+     *
+     * @throws[LvglException] InvalidArgument —— 值非正
+     */
+    public func setVisibleRowCount(rows: Int32): LvRoller {
+        throwIfError(unsafe { lvglcj_roller_set_visible_row_count(handle, rows) }, "roller.setVisibleRowCount")
+        return this
+    }
+}
+
 /// 忙碌指示器
 public class LvSpinner <: LvObject {
     private init(h: Int64) {

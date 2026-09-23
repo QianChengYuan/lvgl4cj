@@ -753,3 +753,92 @@ int32_t lvglcj_image_set_scale(int64_t img, int32_t zoom)
     lv_image_set_scale((lv_obj_t *)lvglcj_ptr_of(img), (uint32_t)zoom);
     return LVGLCJ_OK;
 }
+
+/* ------------------------------------------------------------ roller */
+
+int64_t lvglcj_roller_create(int64_t parent)
+{
+    return widget_create_common(parent, __func__, lv_roller_create, "lv_roller_t");
+}
+
+int32_t lvglcj_roller_set_options(int64_t roller, const char *options, int32_t mode)
+{
+    LVGLCJ_HANDLE_GUARD(roller, __func__);
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    /*
+     * NULL 必须在这里拦下：实现里有 LV_ASSERT_NULL(options)，
+     * 放过去就是一次直接断言（Release 下则是解引用空指针）。
+     * 这与 image 的 set_src(NULL)=清空 恰好相反 —— 同一个库里的两种约定，
+     * 只能逐个读实现来确认，不能按"NULL 通常表示清空"外推。
+     */
+    if (options == NULL) {
+        lvglcj_record_error(LVGLCJ_ERR_INVALID_ARGUMENT, roller, 0, __func__,
+                            "options 不能为空；roller 没有“清空选项”的语义，要空就传不含换行的串");
+        return LVGLCJ_ERR_INVALID_ARGUMENT;
+    }
+    if (mode != LVGLCJ_ROLLER_MODE_NORMAL && mode != LVGLCJ_ROLLER_MODE_INFINITE) {
+        lvglcj_record_error(LVGLCJ_ERR_INVALID_ARGUMENT, roller, mode, __func__,
+                            "mode 必须是 LVGLCJ_ROLLER_MODE_NORMAL 或 LVGLCJ_ROLLER_MODE_INFINITE");
+        return LVGLCJ_ERR_INVALID_ARGUMENT;
+    }
+
+    lv_roller_set_options((lv_obj_t *)lvglcj_ptr_of(roller), options,
+                          mode == LVGLCJ_ROLLER_MODE_NORMAL ? LV_ROLLER_MODE_NORMAL
+                                                            : LV_ROLLER_MODE_INFINITE);
+    return LVGLCJ_OK;
+}
+
+int32_t lvglcj_roller_set_selected(int64_t roller, int32_t sel)
+{
+    LVGLCJ_HANDLE_GUARD(roller, __func__);
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    lv_obj_t *o = (lv_obj_t *)lvglcj_ptr_of(roller);
+
+    /*
+     * 范围校验是本层的责任，不是底层的：lv_roller_set_selected 收 uint32_t
+     * 且**不钳制** —— 越界不报错，只是把内部 id 设大，等到渲染或取串时才越界读。
+     * 那种失败会出现在远离调用点的地方，代价远高于在这里拦一下。
+     *
+     * ★ 这里用 lv_roller_get_option_count() 作基准，它在**两种模式下都返回对外语义的
+     *   选项数**：无限模式内部把 option_cnt 乘过 inf_page_cnt，而这个 getter 会除回去
+     *   （option_cnt / inf_page_cnt）。所以校验不需要按模式分支 ——
+     *   但这是读实现才敢下的结论，不是可以从名字推出来的（"内部计数"与"对外计数"
+     *   在无限模式下确实不是同一个数）。
+     */
+    int32_t n = (int32_t)lv_roller_get_option_count(o);
+    if (sel < 0 || sel >= n) {
+        lvglcj_record_error(LVGLCJ_ERR_INVALID_ARGUMENT, roller, sel, __func__,
+                            "选中索引超出选项范围（须满足 0 <= sel < 选项数）");
+        return LVGLCJ_ERR_INVALID_ARGUMENT;
+    }
+
+    /* 关闭动画：开动画时选中值要等若干帧之后才稳定，
+     * 会让"设完立刻读回"这种确定性用法变成时序赌局。 */
+    lv_roller_set_selected(o, (uint32_t)sel, LV_ANIM_OFF);
+    return LVGLCJ_OK;
+}
+
+int32_t lvglcj_roller_get_selected(int64_t roller)
+{
+    LVGLCJ_HANDLE_GUARD(roller, __func__);
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    return (int32_t)lv_roller_get_selected((lv_obj_t *)lvglcj_ptr_of(roller));
+}
+
+int32_t lvglcj_roller_set_visible_row_count(int64_t roller, int32_t rows)
+{
+    LVGLCJ_HANDLE_GUARD(roller, __func__);
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    if (rows <= 0) {
+        lvglcj_record_error(LVGLCJ_ERR_INVALID_ARGUMENT, roller, rows, __func__,
+                            "可见行数必须为正；0 会得到一个零高度的控件");
+        return LVGLCJ_ERR_INVALID_ARGUMENT;
+    }
+
+    lv_roller_set_visible_row_count((lv_obj_t *)lvglcj_ptr_of(roller), (uint32_t)rows);
+    return LVGLCJ_OK;
+}

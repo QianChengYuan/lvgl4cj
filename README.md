@@ -79,10 +79,10 @@ main() {
 | --- | --- |
 | L1 模块（`src/*.cj`，不含测试） | **19** |
 | C 侧实现（`native/src/*.c`） | **22** |
-| ABI 声明函数 | **242**（已实现 **242**，未实现 **0** —— 自检为「声明与产物完全一致」） |
-| 仓颉侧 `foreign` 声明 | **259** |
-| C 用例 | **10 个可执行 / 476 项检查** |
-| 仓颉测试 | **78 用例（77 通过 / 1 跳过 / 0 失败）** |
+| ABI 声明函数 | **247**（已实现 **247**，未实现 **0** —— 自检为「声明与产物完全一致」） |
+| 仓颉侧 `foreign` 声明 | **264** |
+| C 用例 | **10 个可执行 / 494 项检查** |
+| 仓颉测试 | **79 用例（78 通过 / 1 跳过 / 0 失败）** |
 
 已具备的能力（摘要）：
 
@@ -96,9 +96,9 @@ main() {
 - **控件**：`LvObject`（基类）、`LvLabel`、`LvButton`，P1 批次 1 的
   `LvSwitch` / `LvCheckbox` / `LvBar`，P1 批次 2 的 `LvSlider` / `LvArc` /
   `LvLed` / `LvSpinner`，P1 批次 3 的 `LvDropdown`，P1 批次 4 的 `LvLine`，
-  P1 批次 5 的 `LvImage`，
+  P1 批次 5 的 `LvImage`，P1 批次 6 的 `LvRoller`，
   以及 `LvCanvas`（自定义绘制的唯一出口，§3.11.2）。
-  **共 14 个**，P1 清单其余 5 个见「已知边界」
+  **共 15 个**，P1 清单其余 4 个见「已知边界」
 - **可观测性**：`LvDebug`（`objCount` / `memMonitor` / `perfSample` / `dumpTree`）、`LvBench`（性能测量）
 
 ---
@@ -154,11 +154,11 @@ main() {
      canvas 函数**，不含 polygon —— 以头文件为契约记录，故不实现（需要时应走契约变更）。
    另注意颜色参数的**解释方式不一致**：绘制类与 `fillBg` 是 `0xRRGGBB`（高 8 位不解释，
    透明度走 `opa`），而 `setPalette` 是 `0xAARRGGBB`（调色板项自带 alpha）。
-2. **控件 14 个**：`LvObject`（基类）、`LvLabel`、`LvButton`、`LvSwitch`、
+2. **控件 15 个**：`LvObject`（基类）、`LvLabel`、`LvButton`、`LvSwitch`、
    `LvCheckbox`、`LvBar`、`LvSlider`、`LvArc`、`LvLed`、`LvSpinner`、
-   `LvDropdown`、`LvLine`、`LvImage`、`LvCanvas`。
-   设计文档 §7.1 的 P1 清单还剩 **5 个**未做，全是复合控件：
-   `chart` `table` `roller` `textarea` `keyboard`。
+   `LvDropdown`、`LvLine`、`LvImage`、`LvRoller`、`LvCanvas`。
+   设计文档 §7.1 的 P1 清单还剩 **4 个**未做，全是复合控件：
+   `chart` `table` `textarea` `keyboard`。
    它们之所以被放在后续批次，不是因为难，而是各自引入**新的值类型**
    （图像描述符、点数组、字符串列表），各带一套所有权问题 —— 需要逐个单独设计。
    在此之前需用原生 API 补齐。
