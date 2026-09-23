@@ -692,6 +692,10 @@ foreign func lvglcj_font_has_glyph(font: Int64, codepoint: Int32): Int32
 
 foreign func lvglcj_font_load(path: CString): Int64
 
+/* 从 TTF/OTF 直接加载（需要 LV_USE_TINY_TTF，见 gen_lv_conf.sh）。
+ * 与 lvglcj_font_load 的区别：那个读 LVGL 转换后的 .bin，这个读原始 TTF。 */
+foreign func lvglcj_font_load_ttf(path: CString, font_size: Int32): Int64
+
 foreign func lvglcj_font_delete(font: Int64): Int32
 
 /* ==================================================== t6：样式（§5.7 全量声明） */

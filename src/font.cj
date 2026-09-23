@@ -94,6 +94,27 @@ public class LvFont {
     }
 
     /**
+     * 从 TTF/OTF 直接加载（需构建时启用 LV_USE_TINY_TTF，见 scripts/gen_lv_conf.sh）。
+     *
+     * 与 `load` 的区别：`load` 读 LVGL **转换后**的 .bin 字体；本方法读原始 TTF，
+     * 因此界面可以显示任意中文。这一点很关键 —— LVGL 内置的 CJK 字体只覆盖
+     * 1000 常用字，超出的字会被**静默丢弃**（本项目示例会把缺字数直接打出来核实）。
+     *
+     * path 走 LVGL 的文件系统（盘符 'A'，根目录见 LV_FS_POSIX_PATH，默认是进程工作目录），
+     * 形如 `"A:/xxx.ttf"`。**不能直接给系统字体的绝对路径** —— 除非把它表示成
+     * 相对于 FS 根的路径。
+     *
+     * @throws[LvglException] 类型为 BackendFailure —— 文件打不开、格式不支持或内存不足。
+     */
+    public static func loadTtf(path: String, size: Int32): LvFont {
+        let h = withCString64(path) {cs => unsafe { lvglcj_font_load_ttf(cs, size) }}
+        if (h <= 0) {
+            throw LvglException(BackendFailure, "TTF 字体加载失败：${path}（字号 ${size}）")
+        }
+        return LvFont(h)
+    }
+
+    /**
      * 该字体是否含有某个字符的字形。
      *
      * ★ 「没有字形」**不是**异常，它返回 `false` —— 缺字是一个合法答案。

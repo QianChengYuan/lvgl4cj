@@ -185,6 +185,90 @@ int64_t lvglcj_font_load(const char *path)
     return h;
 }
 
+/*
+ * ★ TTF 加载出来的字体必须用 lv_tiny_ttf_destroy 释放，与 binfont 的不是同一个函数
+ *   （前者还要关 FS 流、销毁两级缓存）。混用是未定义行为，所以删除时必须能分辨。
+ *
+ *   这里用一张小表记录"哪些字体是 TTF 路径创建的"。这与本文件先前**明确拒绝**过的
+ *   「用运行时簿记描述内置字体集合」并不矛盾 —— 区别正是那次教训的关键：
+ *     · 内置字体集合是**编译期已知**的（就那么几个 &lv_font_xxx）→ 比指针即可，
+ *       引入一个会满、会过期、会静默失效的状态纯属自找；
+ *     · TTF 字体是**运行期产生**的（路径与字号由调用方决定）→ 必须有运行时记录。
+ *   而且表满时**明确报错并拒绝创建**，不静默丢弃 —— 先前那次挂死正是静默溢出造成的。
+ */
+#define LVGLCJ_TTF_FONT_MAX 16
+static lv_font_t *g_ttf_fonts[LVGLCJ_TTF_FONT_MAX];
+
+/* 登记成功返回 LVGLCJ_OK；表满返回非 0（调用方必须据此回滚，不能当作成功） */
+static int32_t lvglcj_ttf_font_track(lv_font_t *f)
+{
+    int32_t i;
+    for (i = 0; i < LVGLCJ_TTF_FONT_MAX; i++) {
+        if (g_ttf_fonts[i] == NULL) {
+            g_ttf_fonts[i] = f;
+            return LVGLCJ_OK;
+        }
+    }
+    return LVGLCJ_ERR_BACKEND_FAILURE;
+}
+
+/* 从表里摘掉；返回 1 表示"这个指针是 TTF 路径创建的" */
+static int32_t lvglcj_ttf_font_untrack(lv_font_t *f)
+{
+    int32_t i;
+    for (i = 0; i < LVGLCJ_TTF_FONT_MAX; i++) {
+        if (g_ttf_fonts[i] == f) {
+            g_ttf_fonts[i] = NULL;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int64_t lvglcj_font_load_ttf(const char *path, int32_t font_size)
+{
+    int32_t rc = lvglcj_require_initialized(__func__);
+    if (rc != LVGLCJ_OK) {
+        return LVGLCJ_HANDLE_NULL;
+    }
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    if (path == NULL) {
+        lvglcj_record_error(LVGLCJ_ERR_INVALID_ARGUMENT, 0, 0, __func__, "字体路径为空");
+        return LVGLCJ_HANDLE_NULL;
+    }
+    if (font_size <= 0) {
+        lvglcj_record_error(LVGLCJ_ERR_INVALID_ARGUMENT, 0, font_size, __func__,
+                            "字号必须为正");
+        return LVGLCJ_HANDLE_NULL;
+    }
+
+    /* 与 binfont 一样走 LVGL 的文件系统（FS 盘符 'A'，根目录见 LV_FS_POSIX_PATH） */
+    lv_font_t *f = lv_tiny_ttf_create_file(path, font_size);
+    if (f == NULL) {
+        lvglcj_record_error(LVGLCJ_ERR_BACKEND_FAILURE, 0, 0, __func__,
+                            "TTF 加载失败（检查路径是否在 FS 根下、是否为 tiny_ttf 支持的格式）");
+        return LVGLCJ_HANDLE_NULL;
+    }
+
+    int64_t h = lvglcj_handle_register(f, "lv_font_t(ttf)");
+    if (h == LVGLCJ_HANDLE_NULL) {
+        lv_tiny_ttf_destroy(f);
+        return LVGLCJ_HANDLE_NULL;
+    }
+
+    /* 登记表满时回滚：既不泄漏字体，也不在删除阶段误用 binfont 的销毁函数 */
+    if (lvglcj_ttf_font_track(f) != LVGLCJ_OK) {
+        lvglcj_record_error(LVGLCJ_ERR_BACKEND_FAILURE, h, 0, __func__,
+                            "TTF 字体登记表已满（同时存活的 TTF 字体过多）");
+        lv_tiny_ttf_destroy(f);
+        lvglcj_handle_release(h);
+        return LVGLCJ_HANDLE_NULL;
+    }
+
+    return h;
+}
+
 int32_t lvglcj_font_delete(int64_t font)
 {
     int32_t rc = lvglcj_require_initialized(__func__);
@@ -210,7 +294,14 @@ int32_t lvglcj_font_delete(int64_t font)
     }
 
     if (f != NULL) {
-        lv_binfont_destroy(f);
+        /* ★ 两者的销毁函数不同（见 g_ttf_fonts 上方的说明），必须先分辨来源。
+         *   对 TTF 字体用 lv_binfont_destroy 会让它内部的两级缓存与 FS 流不被释放，
+         *   反之则会把 fmt_txt 的描述符当成 ttf_font_desc_t 来解释 —— 都是未定义行为。 */
+        if (lvglcj_ttf_font_untrack(f)) {
+            lv_tiny_ttf_destroy(f);
+        } else {
+            lv_binfont_destroy(f);
+        }
     }
     lvglcj_handle_release(font);
     return LVGLCJ_OK;

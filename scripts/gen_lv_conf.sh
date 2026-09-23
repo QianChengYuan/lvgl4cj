@@ -74,6 +74,8 @@ sed \
     -e 's|^    #define LV_USE_MEM_MONITOR 0$|    #define LV_USE_MEM_MONITOR 1|' \
     -e 's|^\(    #define LV_PROFILER_INCLUDE \)"lvgl/|\1"|' \
     -e 's|^\(#define LV_FONT_SIMSUN_16_CJK\) *0|\1            1|' \
+    -e 's|^#define LV_USE_TINY_TTF 0$|#define LV_USE_TINY_TTF 1|' \
+    -e 's|^    #define LV_TINY_TTF_FILE_SUPPORT 0$|    #define LV_TINY_TTF_FILE_SUPPORT 1|' \
     "${TEMPLATE}" > "${OUT}"
 
 # ---------------------------------------------------------------------------
@@ -100,6 +102,10 @@ check '^    #define LV_USE_MEM_MONITOR 1$'  'LV_USE_MEM_MONITOR=1'
 check '^#define LV_USE_PROFILER 0$'         'LV_USE_PROFILER=0（避免 trace mark 刷屏）'
 # 注意行尾还有 /*...*/ 注释，因此模式不能以 $ 结尾（写成 ...+1$ 会误报未命中）
 check '^#define LV_FONT_SIMSUN_16_CJK +1 '  'LV_FONT_SIMSUN_16_CJK=1（中文字形）'
+# 仅靠内置 CJK 字体只能覆盖 1000 常用字，界面写中文必然缺字（实测一次缺 33 个）。
+# 打开 tiny_ttf 才能直接读 TTF，中文不再受这个限制 —— 这也是本项目示例能显示中文的前提。
+check '^#define LV_USE_TINY_TTF 1$'        'LV_USE_TINY_TTF=1（直接读 TTF）'
+check '^    #define LV_TINY_TTF_FILE_SUPPORT 1$' 'LV_TINY_TTF_FILE_SUPPORT=1（从文件读，而非仅内存数据）'
 check '^    #define LV_PROFILER_INCLUDE "src/misc/lv_profiler_builtin.h"$' 'LV_PROFILER_INCLUDE 相对 lvgl 根的路径'
 check '^#define LV_USE_FS_POSIX 1$'         'LV_USE_FS_POSIX=1'
 check "^    #define LV_FS_POSIX_LETTER 'A'" 'LV_FS_POSIX_LETTER=A'

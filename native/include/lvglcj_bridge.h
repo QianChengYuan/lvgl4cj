@@ -945,6 +945,16 @@ int64_t lvglcj_font_builtin(int32_t which);
 int32_t lvglcj_font_has_glyph(int64_t font, int32_t codepoint);
 
 int64_t lvglcj_font_load(const char *path);
+
+/* 从 TTF/OTF 直接加载（需要 LV_USE_TINY_TTF + LV_TINY_TTF_FILE_SUPPORT，见 gen_lv_conf.sh）。
+ *
+ * ★ 与 lvglcj_font_load 的区别：后者读的是 LVGL **转换后**的 .bin 字体，前者读原始 TTF。
+ *   要显示任意中文，用 .bin 就得先把整字体转换（体积大，通常要子集化）；读 TTF 则直接可用。
+ *   代价是运行时要解析字体（tiny_ttf），换来的是开发期不必为每个字号/字集生成一个文件。
+ *
+ * ★ path 走 LVGL 的文件系统（FS 盘符 'A'，根目录见 LV_FS_POSIX_PATH），形如 "A:/xxx.ttf"。
+ *   用不了系统字体的绝对路径 —— 除非把它表示成相对于 FS 根的路径。 */
+int64_t lvglcj_font_load_ttf(const char *path, int32_t font_size);
 int32_t lvglcj_font_delete(int64_t font);
 int32_t lvglcj_fs_init_posix(const char *root);
 

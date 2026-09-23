@@ -81,6 +81,36 @@ func makeCard(parent: LvObject, y: Int32, h: Int32, title: String, cjk: LvFont):
     return c
 }
 
+/*
+ * 选一个能显示中文的字体。
+ *
+ * 背景：内置 CJK 字体 lv_font_simsun_16_cjk 只覆盖 1000 常用字，界面写中文必然缺字
+ * （实测本示例缺 33 个）。LVGL 原生的替代方案是读**转换后的 .bin** 字体，但那要先转换
+ * 整字体（体积大，通常还得子集化）；本项目构建已启用 tiny_ttf，可以直接读 TTF。
+ *
+ * ★ 候选路径是**相对于 LVGL 文件系统根**的，而根默认是进程的工作目录 ——
+ *   所以要往上走出仓库、再进到 /mnt/c 下的 Windows 字体目录。这样就不必把字体文件
+ *   拷进仓库：系统字体各有许可，示例不该分发它们。
+ * ★ 全都装不上时退回内置字体：缺字总比起不来好，而且随后的字形自检会把缺字报出来。
+ */
+func pickCjkFont(): LvFont {
+    let cands = ArrayList<String>()
+    cands.add("A:/../../../../../../../c/Windows/Fonts/Deng.ttf")
+    cands.add("A:/../../../../../../../c/Windows/Fonts/Dengb.ttf")
+    cands.add("A:/../../../../../../../c/Windows/Fonts/NotoSansSC-VF.ttf")
+    for (i in 0..cands.size) {
+        try {
+            let f = LvFont.loadTtf(cands[i], 16)
+            println("[gallery_cj][字体] 已直接读 TTF：${cands[i]}")
+            return f
+        } catch (e: LvglException) {
+            /* 这个候选不可用（路径不存在或格式不支持），试下一个 */
+        }
+    }
+    println("[gallery_cj][字体] TTF 候选都装不上，退回内置 CJK 字体（只覆盖 1000 常用字 → 会缺字）")
+    return LvFont.builtin(LvBuiltinFont.Cjk16)
+}
+
 /* 小工具：给对象上正文样式（形参用 LvObject：勾选框这类非 LvLabel 的控件也要用） */
 func bodyStyle(l: LvObject, cjk: LvFont, twoLine!: Bool = false): Unit {
     let s = LvStyle.create().textColor(BODY_FG).textFont(cjk)
@@ -105,7 +135,8 @@ main(args: Array<String>) {
     let backend = Sdl2Backend.start(800, 480)
     let disp = backend.display()
     let scr = LvObject.screenActive()
-    let cjk = LvFont.builtin(LvBuiltinFont.Cjk16)
+    /* 优先直接读 TTF：这样才能显示任意中文；装不上才退回内置（随后自检会报缺字） */
+    let cjk = pickCjkFont()
 
     /* ================= 字形自检（放在建 UI 之前，最早把问题说清楚） ================= */
     let samples = ArrayList<String>()
