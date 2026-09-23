@@ -174,6 +174,22 @@ public class LvDebug {
      *   这里用 try-finally 风格保证异常路径也释放（C 侧无 GC，漏了就是真泄漏）。
      *   注意 free 必须在 releaseArrayRawData **之前**：free 需要那块结构体本身。
      */
+    /**
+     * 把**当前显示的那一帧**存成 P6 PPM 文件（设计文档 §7.3 的 screenshot）。
+     *
+     * ★ 只有 SDL2 后端实现它；null 后端按约定返回 NotSupported（没有屏幕可截）。
+     * ★ 截的是纹理里**已经画好的最后一帧** —— 因此窗口最小化时也能取到画面。
+     * ★ 格式选 PPM 而不是 PNG/BMP：不引额外依赖（PNG 要 SDL_image），
+     *   而且 `scripts/check_ui.py` 直接吃 PPM —— "截图 → 体检 → 结论"可以自己闭合，
+     *   不必再借外部截图工具或探针。
+     *
+     * @throws[LvglException] NotSupported —— 当前后端不支持截图；
+     *         BackendFailure —— 等待渲染线程超时；InvalidArgument —— 路径为空
+     */
+    public static func screenshot(path: String): Unit {
+        throwIfError(withCString(path) {cs => unsafe { lvglcj_sdl2_screenshot(cs) }}, "LvDebug.screenshot")
+    }
+
     public static func dumpTree(root!: LvObject, maxDepth!: Int32 = 8): ArrayList<LvTreeNode> {
         let out = Array<CTreeDump>(1, repeat: CTreeDump())
         let h = unsafe { acquireArrayRawData(out) }

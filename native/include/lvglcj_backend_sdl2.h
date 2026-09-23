@@ -74,6 +74,19 @@ int32_t lvglcj_sdl2_take_wheel_steps(void);
 /* 测试注入：绕过 SDL 直接塞入滚轮格数（与 set_render_suppressed 同类的钩子）。 */
 int32_t lvglcj_sdl2_inject_wheel(int32_t steps);
 
+/* ============================================ 截图（设计文档 §7.3 的 LvDebug.screenshot）
+ *
+ * 把**当前显示的那一帧**写成 P6 PPM（`path` 为文件名）。
+ *
+ * ★ 为什么是后端能力而不是"通用可观测性"：画面在 SDL 的纹理里，只有渲染线程能读它
+ *   （SDL 的约束），所以入口落在后端；设计文档 §7.3 的注脚也是"Screenshot —— SDL2 后端可用"。
+ * ★ 为什么写 PPM 而不是 PNG/BMP：不引额外依赖（SDL_image 要额外库），
+ *   而 PPM 是最简的二进制格式，scripts/check_ui.py 也直接吃它 —— 工具链能自己闭合。
+ * ★ 语义：截的是**纹理里已经画好的最后一帧**，因此窗口最小化时也能取（不需要可见）。
+ *   调用会在有界时间内返回：要么文件写完，要么报错（不会留下半个文件之外的悬念）。
+ */
+int32_t lvglcj_sdl2_screenshot(const char *path);
+
 /* ---------------------------------------------------------- 观测（测试/断言用） */
 int32_t lvglcj_sdl2_flush_count(void);        /* flush sink 被调用次数 */
 int32_t lvglcj_sdl2_present_count(void);      /* 真正 Present 的次数 */

@@ -18,6 +18,27 @@
 
 #include <unistd.h>
 
+/*
+ * 截图：null 后端没有屏幕，按约定返回 NOT_SUPPORTED。
+ *
+ * ★ 为什么一个"SDL2 专有"的符号要落在 headless 后端里：可观测性层
+ *   （LvDebug.screenshot）在两种后端下都要能链接。null 后端给不出画面，
+ *   但必须能把"不支持"这件事**说出来** —— 而不是让调用方拿到链接错误，
+ *   或者拿到一张猜出来的空白图（那比报错更坏：它会让人以为界面就是那样的）。
+ */
+/*
+ * ★ weak 定义：C 侧测试同时链接两种后端，普通定义会与 SDL2 后端那份冲突
+ *   （实测报 multiple definition）。weak 让链接器去选：有真实现时用真实现，
+ *   只有 headless 时落到这个 stub。
+ *   语义上也不会选错 —— SDL2 那份在自己没初始化时同样返回 NOT_SUPPORTED，
+ *   所以"选到哪一份"不影响结论，只是让链接能过。
+ */
+__attribute__((weak)) int32_t lvglcj_sdl2_screenshot(const char *path)
+{
+    (void)path;
+    return LVGLCJ_ERR_NOT_SUPPORTED;
+}
+
 static int64_t g_null_display = LVGLCJ_HANDLE_NULL;
 
 int32_t lvglcj_null_init(int32_t w, int32_t h, int32_t color_format, int32_t buf_lines)

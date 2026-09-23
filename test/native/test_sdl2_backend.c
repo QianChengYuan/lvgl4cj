@@ -292,6 +292,41 @@ int main(void)
         CHECK(lvglcj_sdl2_take_wheel_steps() == 0, "★ 取走后清零（同一格不被重复消费）");
     }
 
+    /* ============================================ ★ 截图（§7.3 LvDebug.screenshot 的后端侧）
+     *
+     * 判据刻意不满足于"文件存在就算过"：
+     *   · 返回成功**且**文件确实被写出（非空）；
+     *   · 头部是合法的 P6 PPM，且宽高与渲染输出一致 —— 只查存在的话，
+     *     一个 0 字节文件也能骗过用例；
+     *   · 空路径被拒（否则可能悄悄写到一个随机位置）。
+     * 注：dummy 驱动下走软件渲染器，SDL_RenderReadPixels 同样可用。
+     */
+    printf("\n-- ★ 截图（写 PPM）--\n");
+    {
+        const char *shot = "/tmp/lvglcj_shot_test.ppm";
+        remove(shot);
+        CHECK(lvglcj_sdl2_screenshot(shot) == LVGLCJ_OK, "截图成功");
+        FILE *fp = fopen(shot, "rb");
+        CHECK(fp != NULL, "★ 文件确实被写出");
+        if (fp != NULL) {
+            char head[32] = {0};
+            size_t n = fread(head, 1, sizeof(head) - 1, fp);
+            long size = 0;
+            fseek(fp, 0, SEEK_END);
+            size = ftell(fp);
+            fclose(fp);
+            CHECK(n > 8 && head[0] == 'P' && head[1] == '6', "★ 是 P6 PPM（头部合法）");
+            int sw = 0;
+            int sh = 0;
+            CHECK(sscanf(head, "P6 %d %d", &sw, &sh) == 2 && sw > 0 && sh > 0,
+                  "★ 头部宽高合法");
+            printf("        （%dx%d，文件 %ld 字节）\n", sw, sh, size);
+            /* PPM 头 + 每像素 3 字节；容差留给换行/空格形式 */
+            CHECK(size > (long)sw * (long)sh * 3L, "★ 文件长度与声明的宽高相符（不是空壳）");
+        }
+        CHECK(lvglcj_sdl2_screenshot(NULL) == LVGLCJ_ERR_INVALID_ARGUMENT, "空路径被拒");
+    }
+
     /* ============================================ ★ 残留额度不得让下一次 flush 提前返回
      *
      * 额度是**单标志（合并语义，不计数）**，sdl2_wait_done 上方的注释写明它成立的前提是

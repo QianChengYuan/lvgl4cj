@@ -38,6 +38,14 @@ static SDL_Window   *g_window = NULL;
 static SDL_Renderer *g_renderer = NULL;
 static SDL_Texture  *g_texture = NULL;
 static uint32_t      g_render_event = 0;
+
+/* 截图请求（第二个自定义事件）。渲染线程独占 SDL，所以截图必须由它去做。 */
+static uint32_t      g_shot_event = 0;
+static char          g_shot_path[1024] = {0};
+static _Atomic int   g_shot_done = 0; /* 0=进行中，1=成功，-1=失败 */
+
+/* 前置声明：事件循环（定义在它之前）要用；写在文件顶部的 globals 之后 */
+static int sdl2_write_screenshot(const char *path);
 static int32_t       g_tex_w = 0;
 static int32_t       g_tex_h = 0;
 static int64_t       g_display = LVGLCJ_HANDLE_NULL;
@@ -563,7 +571,12 @@ int32_t lvglcj_sdl2_init(int32_t w, int32_t h, int32_t color_format, int32_t buf
         return LVGLCJ_ERR_BACKEND_FAILURE;
     }
 
-    g_render_event = SDL_RegisterEvents(1);
+    /*
+     * 注册两个自定义事件：渲染请求与截图请求。
+     * SDL_RegisterEvents(n) 返回一段连续的 event type，用 base / base+1 即可。
+     */
+    g_render_event = SDL_RegisterEvents(2);
+    g_shot_event = (g_render_event == (uint32_t)-1) ? 0 : g_render_event + 1;
     if (g_render_event == (uint32_t)-1) {
         lvglcj_record_error(LVGLCJ_ERR_BACKEND_FAILURE, 0, 0, __func__,
                             "SDL_RegisterEvents 失败");
@@ -713,7 +726,12 @@ int32_t lvglcj_sdl2_poll_events(void)
 
     SDL_Event ev;
     while (SDL_PollEvent(&ev)) {
-        if (g_render_event != 0 && ev.type == g_render_event) {
+        if (g_shot_event != 0 && ev.type == g_shot_event) {
+            /* 截图：在本线程（渲染线程）读回渲染目标并落成 PPM，然后唤醒调用方 */
+            int rc = sdl2_write_screenshot(g_shot_path);
+            atomic_store(&g_shot_done, rc == 0 ? 1 : -1);
+            sdl2_signal_done();
+        } else if (g_render_event != 0 && ev.type == g_render_event) {
             if (atomic_load(&g_render_suppressed)) {
                 /* 测试注入：故意不响应，让等待方走超时分支 */
                 continue;
@@ -808,6 +826,105 @@ int32_t lvglcj_sdl2_poll_events(void)
  * 只在 LVGL 线程里调（示例在 indev 读回调里调）——"取走"是读-改-写，
  * 由单线程调用才不会被吞格。
  */
+/*
+ * 把当前纹理写成 P6 PPM（供 lvglcj_sdl2_screenshot 调用，只在渲染线程上执行）。
+ * 返回 0 成功、-1 失败。
+ */
+static int sdl2_write_screenshot(const char *path)
+{
+    if (path == NULL || path[0] == '\0' || g_renderer == NULL || g_texture == NULL) {
+        return -1;
+    }
+    int w = 0;
+    int h = 0;
+    if (SDL_GetRendererOutputSize(g_renderer, &w, &h) != 0 || w <= 0 || h <= 0) {
+        return -1;
+    }
+
+    /*
+     * 把纹理合成到渲染目标（默认目标 = 后台缓冲），再读回像素。
+     * ★ 不需要 Present：读的是渲染目标而不是窗口，所以窗口最小化时也能取到画面。
+     */
+    SDL_SetRenderTarget(g_renderer, NULL);
+    SDL_RenderClear(g_renderer);
+    if (SDL_RenderCopy(g_renderer, g_texture, NULL, NULL) != 0) {
+        return -1;
+    }
+
+    uint8_t *px = (uint8_t *)malloc((size_t)w * (size_t)h * 4u);
+    if (px == NULL) {
+        return -1;
+    }
+    if (SDL_RenderReadPixels(g_renderer, NULL, SDL_PIXELFORMAT_ARGB8888, px, w * 4) != 0) {
+        free(px);
+        return -1;
+    }
+
+    FILE *f = fopen(path, "wb");
+    if (f == NULL) {
+        free(px);
+        return -1;
+    }
+    fprintf(f, "P6\n%d %d\n255\n", w, h);
+    /*
+     * ARGB8888：按 uint32 取值再移位，避免依赖字节序（读同一台机器写出的 4 字节，
+     * 得到的数值就是 ARGB 的数值，与大小端无关）。
+     */
+    for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+            uint32_t v = ((const uint32_t *)px)[(size_t)y * (size_t)w + (size_t)x];
+            fputc((int)((v >> 16) & 0xFFu), f);
+            fputc((int)((v >> 8) & 0xFFu), f);
+            fputc((int)(v & 0xFFu), f);
+        }
+    }
+    fclose(f);
+    free(px);
+    return 0;
+}
+
+int32_t lvglcj_sdl2_screenshot(const char *path)
+{
+    if (path == NULL) {
+        lvglcj_record_error(LVGLCJ_ERR_INVALID_ARGUMENT, 0, 0, __func__,
+                            "截图路径不能为空");
+        return LVGLCJ_ERR_INVALID_ARGUMENT;
+    }
+    if (g_renderer == NULL || g_texture == NULL || g_shot_event == 0) {
+        lvglcj_record_error(LVGLCJ_ERR_NOT_SUPPORTED, 0, 0, __func__,
+                            "窗口/纹理尚未就绪，或后端未提供截图能力");
+        return LVGLCJ_ERR_NOT_SUPPORTED;
+    }
+
+    /* 单线程（方案 C / 测试）：本线程就是渲染线程，直接做 */
+    if (sdl2_on_render_thread()) {
+        return sdl2_write_screenshot(path) == 0 ? LVGLCJ_OK : LVGLCJ_ERR_BACKEND_FAILURE;
+    }
+
+    /* 多线程（方案 A）：请渲染线程去做，然后有界等待 —— 返回后文件已经写完 */
+    snprintf(g_shot_path, sizeof(g_shot_path), "%s", path);
+    atomic_store(&g_shot_done, 0);
+    {
+        SDL_Event ev;
+        memset(&ev, 0, sizeof(ev));
+        ev.type = g_shot_event;
+        /* 与渲染请求同理：先清掉可能残留的额度，否则等待会被旧额度立刻满足，
+         * 于是"调用返回后文件已写完"这条契约就不成立了。 */
+        sdl2_reset_done();
+        if (SDL_PushEvent(&ev) != 1) {
+            lvglcj_record_error(LVGLCJ_ERR_BACKEND_FAILURE, 0, 0, __func__,
+                                "SDL_PushEvent 失败（事件队列已满）");
+            return LVGLCJ_ERR_BACKEND_FAILURE;
+        }
+    }
+    if (sdl2_wait_done(SDL2_WAIT_TIMEOUT_MS) != 0) {
+        lvglcj_record_error(LVGLCJ_ERR_BACKEND_FAILURE, 0, 0, __func__,
+                            "等待截图完成超时（渲染线程未响应）");
+        return LVGLCJ_ERR_BACKEND_FAILURE;
+    }
+    return atomic_load(&g_shot_done) == 1 ? LVGLCJ_OK : LVGLCJ_ERR_BACKEND_FAILURE;
+}
+
 int32_t lvglcj_sdl2_take_wheel_steps(void)
 {
     /*

@@ -752,6 +752,25 @@ class WidgetTests {
         rt.deinitLvgl()
     }
 
+    // ==================================================== 十七、截图（§7.3）
+
+    /*
+     * LvDebug.screenshot 是设计文档 §7.3 里最后一项未实现的 API（补齐本批）。
+     *
+     * ★ 本用例只钉**失败路径**：L1 测试跑在 headless 后端上、拿不到画面，
+     *   所以能在这里验证的只有"必须抛 NotSupported"。
+     *   真正的截图由 C 侧用例验证（SDL2 后端 + dummy 驱动：文件、PPM 头、宽高一致），
+     *   内容层则由 `python3 scripts/check_ui.py <截图>` 检查。
+     *   把"这里验不了什么"写清楚，比让用例看起来覆盖了更多更可靠。
+     */
+    @TestCase
+    func testScreenshotUnsupportedOnHeadlessBackend(): Unit {
+        let rt = LvglRuntime()
+        let _ = rt.startHeadless(320, 240)
+        @Assert(throwsLvgl({=> LvDebug.screenshot("/tmp/lvglcj_l1_shot.ppm") }), true)
+        rt.deinitLvgl()
+    }
+
     // ==================================================== 六、Canvas（§3.11.2）
 
     /*
