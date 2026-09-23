@@ -211,6 +211,28 @@ int32_t lvglcj_indev_set_group(int64_t indev, int64_t group);
 int32_t lvglcj_indev_add_event(int64_t indev, int32_t code, int32_t cid);
 int32_t lvglcj_indev_delete(int64_t indev);
 
+/* ============================================ Group（键盘/编码器导航）
+ *
+ * ★ 为什么它比看上去重要：**键盘与编码器型 indev 完全不看坐标** —— 它们的输入先送进
+ *   group，由 group 决定"当前焦点对象"，再发给那个对象。没有 group，键盘按下去
+ *   什么也不会发生。设计文档 §12 的 P1 阶段把"Group 与键盘导航"列为交付项。
+ *
+ * 契约要点（读实现确认）：
+ *   · 一个对象**只能属于一个组**（LVGL 的约束），所以移除只需要对象：remove_obj(obj)；
+ *   · 本组不是 LVGL 对象，不参与对象树的级联失效；组被删除后组内对象不受影响；
+ *   · get_focused 返回**对象句柄**（未聚焦返回 0），与其它"取回句柄"的入口同一形态。
+ */
+int64_t lvglcj_group_create(void);
+int32_t lvglcj_group_delete(int64_t g);
+int32_t lvglcj_group_add_obj(int64_t g, int64_t obj);
+int32_t lvglcj_group_remove_obj(int64_t obj);
+int32_t lvglcj_group_focus_obj(int64_t obj);
+int64_t lvglcj_group_get_focused(int64_t g);
+int32_t lvglcj_group_focus_next(int64_t g);
+int32_t lvglcj_group_focus_prev(int64_t g);
+/* 设为默认组：没有显式绑定组的 indev 会用它 */
+int32_t lvglcj_group_set_default(int64_t g);
+
 /*
  * ---- T5 输入数据回填（★ 与设计文档 §5.4 的一处有据补充）----
  *

@@ -562,8 +562,10 @@ class WidgetTests {
         kb.setTextarea(ta)
         @Assert(kb.textarea().isSome(), true)
         /* ★ 用**行为**验证"取回的是同一个对象"，而不是比较句柄数字：
-         *   对取回的对象写一次，再看原对象是否变了 —— 这比比数字更能说明问题，
-         *   也不依赖句柄的内部表示（测试在独立包内，句柄字段未必可见）。 */
+         *   对取回的对象写一次，再看原对象是否变了 —— 这比比数字更能说明问题。
+         *   （更正一处旧注释：句柄字段其实是 public 的（LvObject.handle），
+         *     当初写"未必可见"是我没有核实就下的判断。这里不比较句柄是刻意的：
+         *     行为一致才是"同一个对象"，句柄相同只是必要条件。） */
         kb.textarea().getOrThrow().setText("typed")
         @Assert(ta.text(), "typed")
 
@@ -686,6 +688,67 @@ class WidgetTests {
         @Assert(throwsLvgl({=> other.scrollBy(0, -10) }), true)
 
         box.close()
+        rt.deinitLvgl()
+    }
+
+    // ==================================================== 十六、Group（键盘/编码器导航）
+
+    /*
+     * group 的用途：键盘与编码器型 indev **不看坐标**，输入先送进 group、由 group
+     * 决定"当前焦点对象"，再发给那个对象。没有 group，键盘按下去什么也不会发生 ——
+     * 设计文档 §12 的 P1 阶段把它列为交付项；此前 C 侧实现与 foreign 声明都已存在，
+     * 只缺 L1 封装（这一批补上）。
+     *
+     * 判定方式刻意只用**行为**：把当前焦点对象取回来写一次文本，再看两个 textarea
+     * 各自的内容 —— 这比比句柄数字更能说明"焦点真的落在谁身上"，
+     * 也不依赖句柄的内部表示（句柄计数在别处已单独钉过）。
+     */
+    @TestCase
+    func testGroupFocusNavigation(): Unit {
+        let rt = LvglRuntime()
+        let _ = rt.startHeadless(320, 240)
+        let scr = LvObject.screenActive()
+        let a = LvTextarea.create(scr)
+        let b = LvTextarea.create(scr)
+        let g = LvGroup.create()
+
+        /* 还没加入任何对象时，focused() 应是 None（而不是造一个假对象）。
+         * ★ 这条断言原先被我放在两句 add **之后**，结果失败 —— 那不是实现的问题，
+         *   而是我漏了 LVGL 的行为：加入空组时会**自动聚焦第一个**加入的对象。
+         *   下面紧接着就把这条行为也钉住。 */
+        @Assert(g.focused().isNone(), true)
+
+        g.add(a)
+        g.add(b)
+
+        /* 加入空组 → 自动聚焦第一个加入的对象（实测行为，不是猜的） */
+        @Assert(g.focused().getOrThrow().handle, a.handle)
+
+        /* 焦点在 a：focused() 取回的应是 a 的句柄 */
+        g.focus(a)
+        @Assert(g.focused().isSome(), true)
+        @Assert(g.focused().getOrThrow().handle, a.handle)
+
+        /* focusNext → 焦点换到 b */
+        g.focusNext()
+        @Assert(g.focused().getOrThrow().handle, b.handle)
+
+        /* focusPrev 回到 a */
+        g.focusPrev()
+        @Assert(g.focused().getOrThrow().handle, a.handle)
+
+        /* 移出组后，遍历不再落到 b 身上（组内只剩 a，回绕后仍是 a） */
+        g.remove(b)
+        g.focusNext()
+        @Assert(g.focused().getOrThrow().handle, a.handle)
+
+        /* 失效句柄：关闭后操作必须抛错；再关一次是幂等的（不抛） */
+        g.close()
+        @Assert(throwsLvgl({=> g.focusNext() }), true)
+        g.close()
+
+        a.close()
+        b.close()
         rt.deinitLvgl()
     }
 
