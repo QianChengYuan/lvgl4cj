@@ -98,6 +98,7 @@ static _Atomic int g_quit_requested = 0;  /* 请求退出主循环 */
 static _Atomic int g_pending = 0;         /* 有渲染请求在途 */
 static _Atomic int g_render_suppressed = 0; /* 测试注入：忽略渲染请求 */
 
+static _Atomic int g_paused_drop = 0;     /* 诊断用：暂停路径丢掉的帧数 */
 static _Atomic int32_t g_flush_count = 0;
 static _Atomic int32_t g_present_count = 0;
 static _Atomic int32_t g_wait_timeout_count = 0;
@@ -291,16 +292,28 @@ static void sdl2_apply_texture_update(int64_t disp)
     if (!atomic_load(&g_upd_valid)) {
         return;
     }
-    if (g_upd_stage != NULL && g_texture != NULL) {
-        SDL_Rect r;
-        r.x = g_upd_rect.x1;
-        r.y = g_upd_rect.y1;
-        r.w = g_upd_rect.x2 - g_upd_rect.x1 + 1;
-        r.h = g_upd_rect.y2 - g_upd_rect.y1 + 1;
-        if (SDL_UpdateTexture(g_texture, &r, g_upd_stage, g_upd_pitch) != 0) {
-            lvglcj_record_error(LVGLCJ_ERR_BACKEND_FAILURE, disp, 0, __func__,
-                                SDL_GetError());
-        }
+    if (g_upd_stage == NULL || g_texture == NULL) {
+        /*
+         * ★ 贴不上去时**不能**把"待上传"清掉。
+         *
+         *   早先这里是无条件清掉的（而且连错误都不记）：于是这一帧永远丢失，
+         *   而 LVGL 早已被放行、不会重画那条条带 —— 结果是**永久黑带**。
+         *   现在保留标记，等纹理就绪后下一次再由渲染侧贴上去。
+         */
+        lvglcj_record_error(LVGLCJ_ERR_BACKEND_FAILURE, disp, 0, __func__,
+                            "暂存区或纹理尚未就绪：本帧保留待上传（不丢弃）");
+        return;
+    }
+
+    SDL_Rect r;
+    r.x = g_upd_rect.x1;
+    r.y = g_upd_rect.y1;
+    r.w = g_upd_rect.x2 - g_upd_rect.x1 + 1;
+    r.h = g_upd_rect.y2 - g_upd_rect.y1 + 1;
+    if (SDL_UpdateTexture(g_texture, &r, g_upd_stage, g_upd_pitch) != 0) {
+        /* 同理：失败也保留，让下一次再试，而不是静默丢帧 */
+        lvglcj_record_error(LVGLCJ_ERR_BACKEND_FAILURE, disp, 0, __func__, SDL_GetError());
+        return;
     }
     atomic_store(&g_upd_valid, 0);
 }
@@ -311,10 +324,52 @@ static void sdl2_flush_sink(int64_t disp, const lv_area_t *area, uint8_t *px_map
     (void)user;
     atomic_fetch_add(&g_flush_count, 1);
 
+    /*
+     * ★ 一次性诊断（只打前若干次）：把每次 flush 的**区域**与**像素是否真的是黑的**打出来。
+     *
+     *   这三种答案对应完全不同的原因，靠推理分不开，只能量：
+     *     · 某条带压根没出现在这里 → LVGL 没判它需要重画（invalidate 的问题）；
+     *     · 出现了、但像素全黑 → LVGL 渲染时那块本身就是空的（布局/裁剪的问题）；
+     *     · 像素是彩色的、屏幕上却是黑的 → 是我们贴错了位置（后端的问题）。
+     *   起因：全控件示例里出现了**整条条带纯黑**（48 行渲染条带的整数倍），
+     *   而且每次运行黑的条带不同。已排除的两条路（都由实测否掉）：
+     *   paused 分支从未走到；flush/present/waitTimeout/staleApply 计数都很干净。
+     */
+    static int diag_flush = -1;
+    if (diag_flush < 0) {
+        const char *e = getenv("LVGLCJ_DIAG_FLUSH");
+        diag_flush = (e != NULL && e[0] != '0') ? 1 : 0;
+    }
+    if (diag_flush && area != NULL && px_map != NULL && atomic_load(&g_flush_count) <= 24) {
+        int32_t aw = area->x2 - area->x1 + 1;
+        int32_t ah = area->y2 - area->y1 + 1;
+        long zero = 0;
+        long tot = 0;
+        for (int32_t r = 0; r < ah; r++) {
+            for (int32_t c = 0; c < aw; c++) {
+                const uint8_t *p = px_map + (size_t)r * stride + (size_t)c * 2u;
+                if (p[0] == 0 && p[1] == 0) {
+                    zero++;
+                }
+                tot++;
+            }
+        }
+        fprintf(stderr, "[sdl2] flush#%d area y=%d..%d x=%d..%d 黑像素 %ld/%ld (%.0f%%)\n",
+                (int)atomic_load(&g_flush_count), (int)area->y1, (int)area->y2,
+                (int)area->x1, (int)area->x2, zero, tot,
+                tot > 0 ? 100.0 * (double)zero / (double)tot : 0.0);
+    }
+
     if (atomic_load(&g_paused)) {
         /* 窗口已关闭/最小化：不再渲染，但仍要放行，否则 LVGL 卡住。
          * 放在暂存之前：此时连拷贝都不必做。 */
         atomic_store(&g_upd_valid, 0);
+        /* 诊断：这条路径会**丢弃**这一帧，而 LVGL 以为它已显示（见下方 flush_ready）。
+         * 只报第一次：这条路径本就不该频繁出现，打太多会把日志淹掉。 */
+        if ((int)atomic_fetch_add(&g_paused_drop, 1) + 1 == 1) {
+            fprintf(stderr, "[sdl2] !! paused 路径丢弃了一帧：y=%d..%d（后续同路径不再重复打印）\n",
+                    (int)area->y1, (int)area->y2);
+        }
         lvglcj_display_flush_ready(disp);
         return;
     }
@@ -453,10 +508,28 @@ int32_t lvglcj_sdl2_init(int32_t w, int32_t h, int32_t color_format, int32_t buf
         return LVGLCJ_ERR_BACKEND_FAILURE;
     }
 
-    g_renderer = SDL_CreateRenderer(g_window, -1, SDL_RENDERER_ACCELERATED);
+    /*
+     * ★★ 默认用**软件**渲染器，而不是加速渲染器。
+     *
+     *   这是实测结论，不是保守选择：在 WSLg 上走加速（GL）渲染器时，对纹理做
+     *   **子矩形**更新会把内容写错 —— 画面上出现**整条的纯黑带**
+     *   （48 行渲染条带的整数倍，每次运行位置还不同）以及同一块内容错位重复。
+     *
+     *   判定链条（每一步都是量出来的，不是推的）：
+     *     · 首帧 10 条条带全部冲刷，每条全宽、像素 **0% 黑**（C 侧探针实测）；
+     *     · 相隔 1 秒连抓两张，黑带位置完全一致 → 抓图可信，不是抖动；
+     *     · 同一份二进制加 SDL_RENDER_DRIVER=software，黑带**完全消失**，
+     *       卡片带恢复成 5 段正常高度（56/96/96/96/88）。
+     *   ⇒ 问题落在渲染后端，不在 LVGL、不在丢帧、不在抓图。
+     *
+     *   代价很小：LVGL 本来就是软件绘制、纹理也在 CPU 侧，末端这次合成拷贝
+     *   在 800x480x30fps 下只是几十 MB/s 的内存带宽。
+     *   要回到加速渲染：设 SDL_RENDER_DRIVER=opengl（SDL 会优先该驱动）。
+     */
+    g_renderer = SDL_CreateRenderer(g_window, -1, SDL_RENDERER_SOFTWARE);
     if (g_renderer == NULL) {
-        /* 加速渲染器不可用时退回软件渲染 —— 这也是 dummy 驱动下的正常路径 */
-        g_renderer = SDL_CreateRenderer(g_window, -1, SDL_RENDERER_SOFTWARE);
+        /* 个别平台/驱动下 software 不可用，再退回加速 —— 也是 dummy 驱动下的路径 */
+        g_renderer = SDL_CreateRenderer(g_window, -1, SDL_RENDERER_ACCELERATED);
     }
     if (g_renderer == NULL) {
         lvglcj_record_error(LVGLCJ_ERR_BACKEND_FAILURE, 0, 0, __func__, SDL_GetError());

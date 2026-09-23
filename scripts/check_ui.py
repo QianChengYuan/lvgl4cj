@@ -46,24 +46,33 @@ import zlib
 # 调色板分类
 # ---------------------------------------------------------------------------
 
-SCREEN, CARD, WHITE, LIGHT, BLUE, GREEN, RED, YELLOW, OTHER = range(9)
+BLACK, SCREEN, CARD, WHITE, LIGHT, BLUE, GREEN, RED, YELLOW, OTHER = range(10)
 
-NAME = {SCREEN: "屏幕底", CARD: "卡片底", WHITE: "白", LIGHT: "浅", BLUE: "蓝",
-        GREEN: "绿", RED: "红", YELLOW: "黄", OTHER: "其他"}
-CHAR = {SCREEN: ".", CARD: "#", WHITE: "W", LIGHT: "-", BLUE: "B",
+NAME = {BLACK: "纯黑", SCREEN: "屏幕底", CARD: "卡片底", WHITE: "白", LIGHT: "浅",
+        BLUE: "蓝", GREEN: "绿", RED: "红", YELLOW: "黄", OTHER: "其他"}
+CHAR = {BLACK: "X", SCREEN: ".", CARD: "#", WHITE: "W", LIGHT: "-", BLUE: "B",
         GREEN: "G", RED: "R", YELLOW: "Y", OTHER: "?"}
 
-# 「客户端区域」的标记色：只用这两种**这个应用独有**的深色调。
+# 「客户端区域」的标记色：本应用独有的深色调。
 # 刻意不含白/浅：窗口标题栏是中性灰，会被归到「浅」，于是不会被算进客户端区域。
-MARKER = (SCREEN, CARD)
+MARKER = (BLACK, SCREEN, CARD)
 
 # 「内容像素」：文本、控件、图形会用到的亮色。
 # 重影检测要靠它把"卡片内部的纯色空行"筛掉 —— 那种空行签名天然相同，不是重影。
 CONTENT = (WHITE, LIGHT, BLUE, GREEN, RED, YELLOW)
 
+# 「背景像素」：卡片之间/之下的底色，以及**从未被写过的纹理像素**。
+BACKGROUNDISH = (BLACK, SCREEN)
+
 
 def classify(r, g, b):
     v = (r + g + b) // 3
+    # ★ 纯黑要单独成一类：本示例的任何颜色都不是纯黑（屏幕底 #10141C 偏蓝、
+    #   卡片底 #2A3242），所以出现大片纯黑只有一个解释 ——
+    #   那是**纹理里从未被写过的像素**（新建纹理的内容未定义，通常是 0）。
+    #   早期版本把纯黑并进"屏幕底"，于是脚本对这种现象完全失明。
+    if v <= 6:
+        return BLACK
     if v < 40:
         return SCREEN
     # 卡片底是**偏蓝的**深灰（0x2A3242 → b-r=24、b-g=16）。
@@ -401,7 +410,7 @@ def card_bands(labels, box, min_h=6, gap=2):
     flags = []
     for y in range(y0, y0 + bh):
         row = labels[y][x0:x0 + bw]
-        non_bg = sum(1 for v in row if v != SCREEN)
+        non_bg = sum(1 for v in row if v not in BACKGROUNDISH)
         flags.append(non_bg * 100 // max(1, bw) >= 50)
     bands = []
     y = 0
@@ -552,6 +561,30 @@ def report(img, src_name):
         return
     x0, y0, bw, bh = box
     print("  客户端区域：x=%d y=%d 宽=%d 高=%d" % (x0, y0, bw, bh))
+
+    # ★ 纯黑带：本示例不用纯黑，所以大片纯黑 = 纹理里从未被写过的像素。
+    #   这是最值得单独报的一项：它把"没画过"和"画成深色"区分开。
+    blacks = []
+    for y in range(y0, y0 + bh):
+        row = labels[y][x0:x0 + bw]
+        if sum(1 for v in row if v == BLACK) * 100 // max(1, bw) >= 80:
+            if blacks and y == blacks[-1][1] + 1:
+                blacks[-1] = (blacks[-1][0], y)
+            else:
+                blacks.append((y, y))
+    blacks = [b for b in blacks if b[1] - b[0] >= 3]
+    if blacks:
+        area = sum(b[1] - b[0] + 1 for b in blacks) * bw
+        print("  ★★ 纯黑带 %d 段，合计 %d 行（占客户端高度 %d%%）："
+              % (len(blacks), sum(b[1] - b[0] + 1 for b in blacks),
+                 sum(b[1] - b[0] + 1 for b in blacks) * 100 // max(1, bh)))
+        for (a, b) in blacks[:8]:
+            print("      y=%d..%d  高 %d  面积 %d px" % (a, b, b - a + 1, (b - a + 1) * bw))
+        print("      → 纯黑不是本示例用的颜色（屏幕底 #10141C、卡片底 #2A3242）。")
+        print("        这些像素**从未被写过**：要么 LVGL 没渲染这块，要么贴到纹理上的")
+        print("        是缓冲区里没画过的那一段。它和\"旧像素残留\"是两回事，要分开查。")
+    else:
+        print("  纯黑带：无 ✓")
 
     bands = card_bands(labels, box)
     print("  卡片带 %d 段：" % len(bands))

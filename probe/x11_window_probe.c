@@ -62,6 +62,22 @@ static void report_point(XImage *im, int x, int y, const char *label)
     printf("  %-22s (%3d,%3d) rgb=(%3d,%3d,%3d) 0x%06lX\n", label, x, y, r, g, b, p & 0xFFFFFF);
 }
 
+/*
+ * 通道取值：按 XImage 自带的掩码取，而不是假定 BGRA 的字节序。
+ * 掩码在 XGetImage 的结果里是权威描述，28/30 位深也能对。
+ */
+static unsigned int chan_of(unsigned long p, unsigned long mask)
+{
+    if (mask == 0) {
+        return 0;
+    }
+    unsigned int s = 0;
+    while (((mask >> s) & 1UL) == 0) {
+        s++;
+    }
+    return (unsigned int)((p & mask) >> s);
+}
+
 int main(int argc, char **argv)
 {
     Display *d = XOpenDisplay(NULL);
@@ -88,6 +104,38 @@ int main(int argc, char **argv)
         printf("XGetImage 失败\n");
         XCloseDisplay(d);
         return 4;
+    }
+
+    /*
+     * 导出 P6 PPM（若给了参数 1 作为路径）。
+     *
+     * 为什么需要它：scripts/check_ui.py 的现场抓图依赖 import / xwd / xwininfo /
+     * python-xlib，而本机这四个都没有 —— 只有 Xlib 直连是可靠的（本探针已证明）。
+     * 于是绕一步：探针导出 PPM，再由 Python 侧做体检。
+     * 这样"能不能自己看见画面"就不再取决于装了哪些工具。
+     */
+    if (argc >= 2) {
+        FILE *f = fopen(argv[1], "wb");
+        if (f == NULL) {
+            printf("打不开输出文件 %s\n", argv[1]);
+        } else {
+            fprintf(f, "P6\n%d %d\n255\n", im->width, im->height);
+            unsigned char *row = (unsigned char *)malloc((size_t)im->width * 3u);
+            if (row != NULL) {
+                for (int y = 0; y < im->height; y++) {
+                    for (int x = 0; x < im->width; x++) {
+                        unsigned long p = XGetPixel(im, x, y);
+                        row[x * 3 + 0] = (unsigned char)chan_of(p, im->red_mask);
+                        row[x * 3 + 1] = (unsigned char)chan_of(p, im->green_mask);
+                        row[x * 3 + 2] = (unsigned char)chan_of(p, im->blue_mask);
+                    }
+                    fwrite(row, 1, (size_t)im->width * 3u, f);
+                }
+                free(row);
+            }
+            fclose(f);
+            printf("已导出 %s（%dx%d）\n", argv[1], im->width, im->height);
+        }
     }
 
     long total = (long)im->width * im->height;
