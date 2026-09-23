@@ -573,6 +573,85 @@ int main(void)
         CHECK(lvglcj_handle_state(ro) != LVGLCJ_HSTATE_ALIVE, "删除后不再报告 ALIVE");
     }
 
+    /* ================================================== 7i. P1 批次 7：textarea
+     *
+     * 本段的重点全在 get_text 这个"第一个字符串取回入口"上：
+     *   · 调用方缓冲被写入后，内容来自 LVGL 自己的拷贝（所以覆写过输入缓冲也没关系）；
+     *   · 缓冲不足**必须报错且一个字都不写** —— 截断会得到一个"看起来对"的短字符串，
+     *     那比报错更难发现；
+     *   · 失败路径必须与"空文本"可区分（前者是负错误码，后者是长度 0）。
+     */
+    printf("\n-- 7i. P1 批次 7 控件（textarea）--\n");
+    {
+        int64_t ta = lvglcj_textarea_create(scr);
+        CHECK(ta != 0, "创建 textarea");
+
+        char txt[32];
+        strcpy(txt, "hello");
+        CHECK(lvglcj_textarea_set_text(ta, txt) == LVGLCJ_OK, "设置文本");
+        memset(txt, 0x5A, sizeof(txt)); /* 覆写调用方缓冲：钉住"拷贝"这条契约 */
+
+        char out[64];
+        memset(out, 0, sizeof(out));
+        CHECK(lvglcj_textarea_get_text(ta, out, sizeof(out)) == 5, "★ 取回长度为 5");
+        CHECK(strcmp(out, "hello") == 0, "★ 内容正确（输入缓冲已被覆写，说明确是拷贝）");
+
+        /* 探测用法：传 NULL 只回报长度，不要求调用方先知道要多大 */
+        CHECK(lvglcj_textarea_get_text(ta, NULL, 0) == 5, "★ 传 NULL 只回报长度");
+
+        /* 缓冲不足：报错，且不写入 —— 用哨兵字节验证"一个字都没写" */
+        char small[3];
+        memset(small, 0x11, sizeof(small));
+        CHECK(lvglcj_textarea_get_text(ta, small, (int32_t)sizeof(small))
+                  == LVGLCJ_ERR_INVALID_ARGUMENT,
+              "★ 缓冲不足被拒（不是截断成 hel）");
+        CHECK((unsigned char)small[0] == 0x11 && (unsigned char)small[1] == 0x11
+                  && (unsigned char)small[2] == 0x11,
+              "★ 缓冲不足时一个字都没写（哨兵未被破坏）");
+
+        /* 恰好放得下（长度+1 = 6）应当成功 —— 边界值必须能用 */
+        char exact[6];
+        CHECK(lvglcj_textarea_get_text(ta, exact, (int32_t)sizeof(exact)) == 5,
+              "★ 缓冲恰好容纳 长度+1 时成功（边界值）");
+
+        CHECK(lvglcj_textarea_set_text(ta, NULL) == LVGLCJ_ERR_INVALID_ARGUMENT,
+              "NULL 文本被拒（空文本应传空串）");
+        CHECK(lvglcj_textarea_set_placeholder_text(ta, "type here") == LVGLCJ_OK, "占位文本");
+        CHECK(lvglcj_textarea_set_one_line(ta, 1) == LVGLCJ_OK, "单行模式");
+        CHECK(lvglcj_textarea_set_max_length(ta, 0) == LVGLCJ_OK, "最大长度 0 = 不限制");
+        CHECK(lvglcj_textarea_set_max_length(ta, -1) == LVGLCJ_ERR_INVALID_ARGUMENT,
+              "★ 负最大长度被拒（转 uint32 会变成不限制）");
+
+        /* 密码模式：显示成圆点，但取回的应是真实文本 */
+        CHECK(lvglcj_textarea_set_password_mode(ta, 1) == LVGLCJ_OK, "开启密码模式");
+        char pwd[64];
+        memset(pwd, 0, sizeof(pwd));
+        CHECK(lvglcj_textarea_get_text(ta, pwd, sizeof(pwd)) == 5,
+              "★ 密码模式下可取回真实文本长度");
+        CHECK(strcmp(pwd, "hello") == 0, "★ 取回的是真实文本，不是圆点");
+        CHECK(lvglcj_textarea_set_password_mode(ta, 0) == LVGLCJ_OK, "关闭密码模式");
+
+        /* 空文本：长度 0（与"失败"必须可区分） */
+        CHECK(lvglcj_textarea_set_text(ta, "") == LVGLCJ_OK, "设为空文本");
+        CHECK(lvglcj_textarea_get_text(ta, out, sizeof(out)) == 0, "★ 空文本返回长度 0");
+
+        /* 中文按**字节**计：3 个汉字 = 9 字节（不是 3） */
+        CHECK(lvglcj_textarea_set_text(ta, "中文测") == LVGLCJ_OK, "设置中文文本");
+        CHECK(lvglcj_textarea_get_text(ta, out, sizeof(out)) == 9,
+              "★ 多字节按字节计（3 个汉字 = 9 字节），与契约一致");
+
+        /* 失效句柄：必须是负错误码，不能返回 0 冒充空文本 */
+        int64_t holder = lvglcj_obj_create(scr);
+        int64_t ta2 = lvglcj_textarea_create(holder);
+        CHECK(lvglcj_obj_delete(holder) == LVGLCJ_OK, "删除父对象");
+        CHECK(lvglcj_handle_state(ta2) == LVGLCJ_HSTATE_INVALIDATED, "★ textarea 句柄级联失效");
+        CHECK(lvglcj_textarea_get_text(ta2, out, sizeof(out)) < 0,
+              "★ 失效句柄取文本返回负错误码（不是 0 冒充空文本）");
+
+        CHECK(lvglcj_obj_delete(ta) == LVGLCJ_OK, "删除 textarea");
+        CHECK(lvglcj_handle_state(ta) != LVGLCJ_HSTATE_ALIVE, "删除后不再报告 ALIVE");
+    }
+
     /* ================================================== 8. 清理顺序 */
     printf("\n-- 8. 清理 --\n");
     /*

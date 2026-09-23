@@ -419,6 +419,60 @@ class WidgetTests {
         rt.deinitLvgl()
     }
 
+    // ==================================================== 十二、P1 批次 7：textarea
+
+    /*
+     * text() 是本层第一个把字符串从 C 取回来的入口，因此重点不在"能读能写"，
+     * 而在两条边界：
+     *   · 长度按**字节**（中文一个字 3 字节）—— 按字符理解会在多字节文本上出现
+     *     "看起来只少了一个字"这类难查的截断；
+     *   · 句柄失效必须**抛异常而不是返回空串** —— "读不到"和"内容是空的"
+     *     混成一件，调用方会把失效当成用户清空了输入。
+     */
+    @TestCase
+    func testTextareaRoundTripAndFailureIsNotEmpty(): Unit {
+        let rt = LvglRuntime()
+        let _ = rt.startHeadless(320, 240)
+        let ta = LvTextarea.create(LvObject.screenActive())
+
+        ta.setText("hello")
+        @Assert(ta.text(), "hello")
+
+        /* 空文本单独走一条路径（探到长度 0 就不分配缓冲） */
+        ta.setText("")
+        @Assert(ta.text(), "")
+
+        /* 多字节按字节计：3 个汉字 = 9 字节 */
+        ta.setText("中文测")
+        @Assert(ta.text(), "中文测")
+        @Assert(ta.text().size, 9)
+
+        ta.setOneLine(true)
+        ta.setText("single")
+        @Assert(ta.text(), "single")
+        ta.setPlaceholderText("type here")
+
+        /* 密码模式：显示成圆点，但取回的应是真实文本 */
+        ta.setPasswordMode(true)
+        ta.setText("secret")
+        @Assert(ta.text(), "secret")
+        ta.setPasswordMode(false)
+
+        ta.setMaxLength(0) /* 0 = 不限制 */
+        @Assert(throwsLvgl({=> ta.setMaxLength(-1) }), true)
+
+        /* ★ 失效句柄：text() 抛异常，而不是返回空串 */
+        let holder = LvObject.create(LvObject.screenActive())
+        let ta2 = LvTextarea.create(holder)
+        ta2.setText("x")
+        holder.close()
+        @Assert(throwsLvgl({=> ta2.text() }), true)
+        @Assert(throwsLvgl({=> ta2.setText("y") }), true)
+
+        ta.close()
+        rt.deinitLvgl()
+    }
+
     // ==================================================== 六、Canvas（§3.11.2）
 
     /*

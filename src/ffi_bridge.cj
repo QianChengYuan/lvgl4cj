@@ -482,6 +482,27 @@ foreign func lvglcj_roller_set_visible_row_count(roller: Int64, rows: Int32): In
 public let LVGLCJ_ROLLER_MODE_NORMAL: Int32 = 0
 public let LVGLCJ_ROLLER_MODE_INFINITE: Int32 = 1
 
+/* ---------------- P1 批次 7：textarea ----------------
+ *
+ * ★ get_text 的形态：写入调用方缓冲、返回长度。传 NULL 缓冲只探长度。
+ *   这里刻意**不接受**"返回 const char*"那种写法 —— LVGL 的内部文本缓冲随时会被
+ *   set_text 改掉，把那个指针交到仓颉侧等于把生命周期问题转嫁给调用方；
+ *   而且 const char* 没法用负错误码表达失败。
+ */
+foreign func lvglcj_textarea_create(parent: Int64): Int64
+
+foreign func lvglcj_textarea_set_text(ta: Int64, txt: CString): Int32
+
+foreign func lvglcj_textarea_get_text(ta: Int64, buf: CPointer<UInt8>, size: Int32): Int32
+
+foreign func lvglcj_textarea_set_placeholder_text(ta: Int64, txt: CString): Int32
+
+foreign func lvglcj_textarea_set_one_line(ta: Int64, on: Int32): Int32
+
+foreign func lvglcj_textarea_set_password_mode(ta: Int64, on: Int32): Int32
+
+foreign func lvglcj_textarea_set_max_length(ta: Int64, len: Int32): Int32
+
 /* ---------------- Canvas（§3.11.2）：自定义绘制的唯一出口 ----------------
  *
  * ★ 颜色参数的**解释方式在不同函数上不同**，调用方必须看清：

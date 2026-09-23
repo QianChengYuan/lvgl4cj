@@ -686,6 +686,42 @@ int32_t lvglcj_roller_get_selected(int64_t roller);
 /* 可见行数。0 会得到一个零高度的控件，没有语义，拦下 */
 int32_t lvglcj_roller_set_visible_row_count(int64_t roller, int32_t rows);
 
+/* ============================================ 控件（P1 批次 7：textarea）
+ *
+ * ★ 所有权：**文本会被拷贝**（读实现确认）：set_text 走 lv_label_set_text；
+ *   密码模式下先 lv_strdup 到内部 pwd_tmp 再交给 label。两条路径都不保留调用方的指针。
+ *
+ * ★ get_text 是本 ABI 里第一个"把字符串取回来"的入口，形态是刻意选的：
+ *   写入调用方缓冲 + 返回长度，**而不是返回 const char***。
+ *   返回内部指针会把"这份指针何时失效"变成调用方的负担（text 随时会被 set_text 改掉），
+ *   而 const char* 的返回类型又没法用负错误码表达失败。
+ *   写入缓冲把两件事都变成显式的：要多大（先传 NULL 探长度）、失败没有（负错误码）。
+ */
+int64_t lvglcj_textarea_create(int64_t parent);
+
+/* 设置文本。'\n' 表示多行（单行模式下会被折成空格）。文本会被拷贝。 */
+int32_t lvglcj_textarea_set_text(int64_t ta, const char *txt);
+
+/* 取文本：写进调用方缓冲（尾部补 NUL），返回**文本字节数**（不含 NUL，多字节字符按字节计）。
+ *   buf == NULL → 只回报所需长度，不写入（先探测、再取用的两步用法）。
+ *   buf != NULL 但 size <= 所需长度 → **不写入任何内容**并返回 LVGLCJ_ERR_INVALID_ARGUMENT。
+ *     （宁可报错也不截断：截断会得到一个"看起来对"的短字符串，那是比报错更坏的失败。）
+ *   句柄失效等返回负错误码 —— 不会返回 0 冒充"空文本"。 */
+int32_t lvglcj_textarea_get_text(int64_t ta, char *buf, int32_t size);
+
+/* 占位文本（文本为空时显示）。会被拷贝。 */
+int32_t lvglcj_textarea_set_placeholder_text(int64_t ta, const char *txt);
+
+/* 单行模式（回车不换行、且不显示换行） */
+int32_t lvglcj_textarea_set_one_line(int64_t ta, int32_t on);
+
+/* 密码模式：显示为圆点，内部把真实文本另存一份 */
+int32_t lvglcj_textarea_set_password_mode(int64_t ta, int32_t on);
+
+/* 最大字符数。★ 0 表示不限制，所以 0 合法、负数被拒。
+ * 另注：LVGL 的 lv_textarea_set_text 会**绕过**这个上限（其文档明确写了）。 */
+int32_t lvglcj_textarea_set_max_length(int64_t ta, int32_t len);
+
 /* ============================================================ §3.11.2 Canvas */
 int64_t lvglcj_canvas_create(int64_t parent);
 int32_t lvglcj_canvas_set_buffer(int64_t canvas, int32_t w, int32_t h);

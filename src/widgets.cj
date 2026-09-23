@@ -742,6 +742,137 @@ public class LvRoller <: LvObject {
     }
 }
 
+/*
+ * ===================== P1 批次 7：textarea =====================
+ * 文本所有权与 label 同类：LVGL 会拷贝（NORMAL 走 label，密码模式先 lv_strdup）。
+ *
+ * ★ text() 的取回方式是本层第一个"把字符串从 C 取回来"的入口，做法写在这里：
+ *   先传空指针探长度，再按长度取 —— 两次调用换掉"猜缓冲该多大"这件事。
+ *   缓冲用 Array<UInt8> + acquireArrayRawData（与 LvDebug 同一做法：
+ *   不必自己做 LibC.malloc，也就不存在异常路径漏 free 的问题）。
+ *   长度单位是**字节**而不是字符（中文一个字 3 字节），这与 C 侧契约一致。
+ */
+
+/// 文本输入框
+public class LvTextarea <: LvObject {
+    private init(h: Int64) {
+        super(h)
+    }
+
+    /**
+     * 创建一个 textarea。创建后需 setText 才有内容（空框会显示占位文本）。
+     *
+     * @throws[LvglException] 同 LvSwitch.create
+     */
+    public static func create(parent: LvObject): LvTextarea {
+        ensureLvglOwnership()
+        let h = unsafe { lvglcj_textarea_create(parent.handle) }
+        if (h <= 0) {
+            throw LvglException(OutOfMemory, "textarea 创建失败（LVGL 内存池已满，或未启动显示导致没有默认屏幕）")
+        }
+        return LvTextarea(h)
+    }
+
+    /**
+     * 设置文本。`\n` 表示换行（单行模式下会被折成空格）。
+     *
+     * 文本会被 LVGL 拷贝，传入的 String 生命周期不受约束。
+     *
+     * @throws[LvglException] 句柄失效等
+     */
+    public func setText(txt: String): LvTextarea {
+        throwIfError(withCString(txt) {
+            cs => unsafe { lvglcj_textarea_set_text(handle, cs) }
+        }, "textarea.setText")
+        return this
+    }
+
+    /**
+     * 取当前文本。
+     *
+     * 密码模式下拿到的是**真实文本**（LVGL 把真文本另存了一份），不是显示用的圆点。
+     *
+     * @throws[LvglException] 句柄失效时抛错 —— 刻意**不返回空串**：
+     *   "读不到"与"内容是空的"是两件事，混成一件会让调用方把失效当成空输入。
+     */
+    public func text(): String {
+        /* 先探长度：传空指针，C 侧只回报所需字节数 */
+        let n = unsafe { lvglcj_textarea_get_text(handle, CPointer<UInt8>(), 0) }
+        if (n < 0) {
+            throw LvglException(InvalidArgument, "textarea.text 失败（句柄失效？）")
+        }
+        if (n == 0) {
+            return ""
+        }
+        /* 多留 1 字节给结尾 NUL。注意 Array 的尺寸参数是 Int64，
+         * 而 ABI 的长度是 Int32 —— 这里必须显式转换，不能指望隐式提升。 */
+        let len = Int64(n)
+        let buf = Array<UInt8>(len + 1, repeat: 0)
+        let h = unsafe { acquireArrayRawData(buf) }
+        let rc = unsafe { lvglcj_textarea_get_text(handle, h.pointer, n + 1) }
+        unsafe { releaseArrayRawData(h) }
+        /*
+         * ★★ 这里**不能**用 throwIfError。
+         *
+         *   它把"非 0 / 非 1 的返回值"一律当成错误码，而本函数成功时返回的是
+         *   **字节数** —— 于是取回 "secret"（5 字节）会被读成错误码 5，
+         *   抛出一个 code=5 的 UnknownCode 异常。这个坑本项目已有先例：
+         *   LvDebug.dumpTree 的注释里写着"返回值是节点数，不能交给 throwIfError"。
+         *   （写这段时我正是读过那条注释之后仍然踩了 —— 所以这里把它写成规则：
+         *    凡是"成功时返回计数/长度"的入口，判错一律用 `< 0`，不交给 throwIfError。）
+         */
+        if (rc < 0) {
+            throw LvglException(InvalidArgument, "textarea.text 失败（错误码 ${rc}）")
+        }
+        /* 长度按字节给，故这里取前 n 个字节交给 UTF-8 解码 */
+        return String.fromUtf8(buf[0..len])
+    }
+
+    /**
+     * 占位文本（文本为空时显示）。会被拷贝。
+     *
+     * @throws[LvglException] 句柄失效等
+     */
+    public func setPlaceholderText(txt: String): LvTextarea {
+        throwIfError(withCString(txt) {
+            cs => unsafe { lvglcj_textarea_set_placeholder_text(handle, cs) }
+        }, "textarea.setPlaceholderText")
+        return this
+    }
+
+    /// 单行模式（回车不换行、且不显示换行）
+    public func setOneLine(on: Bool): LvTextarea {
+        throwIfError(unsafe { lvglcj_textarea_set_one_line(handle, if (on) {
+            1
+        } else {
+            0
+        }) }, "textarea.setOneLine")
+        return this
+    }
+
+    /// 密码模式：显示为圆点，内部保留真实文本（text() 仍能取到真实内容）
+    public func setPasswordMode(on: Bool): LvTextarea {
+        throwIfError(unsafe { lvglcj_textarea_set_password_mode(handle, if (on) {
+            1
+        } else {
+            0
+        }) }, "textarea.setPasswordMode")
+        return this
+    }
+
+    /**
+     * 最大字符数。`0` 表示不限制。
+     *
+     * 注意 LVGL 的 setText 会绕过这个上限（其文档明确说明）——上限约束的是用户输入。
+     *
+     * @throws[LvglException] InvalidArgument —— 负值（0 才是不限制）
+     */
+    public func setMaxLength(len: Int32): LvTextarea {
+        throwIfError(unsafe { lvglcj_textarea_set_max_length(handle, len) }, "textarea.setMaxLength")
+        return this
+    }
+}
+
 /// 忙碌指示器
 public class LvSpinner <: LvObject {
     private init(h: Int64) {

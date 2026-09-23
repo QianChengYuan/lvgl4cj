@@ -842,3 +842,111 @@ int32_t lvglcj_roller_set_visible_row_count(int64_t roller, int32_t rows)
     lv_roller_set_visible_row_count((lv_obj_t *)lvglcj_ptr_of(roller), (uint32_t)rows);
     return LVGLCJ_OK;
 }
+
+/* ------------------------------------------------------------ textarea */
+
+int64_t lvglcj_textarea_create(int64_t parent)
+{
+    return widget_create_common(parent, __func__, lv_textarea_create, "lv_textarea_t");
+}
+
+int32_t lvglcj_textarea_set_text(int64_t ta, const char *txt)
+{
+    LVGLCJ_HANDLE_GUARD(ta, __func__);
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    /* 与 label 一致：文本 setter 不收 NULL（空文本用 "" 表达）。
+     * LVGL 侧不保证对 NULL 友好，放进去等于把一次空指针解引用留给它。 */
+    if (txt == NULL) {
+        lvglcj_record_error(LVGLCJ_ERR_INVALID_ARGUMENT, ta, 0, __func__,
+                            "文本不能为空指针；空文本请传空串");
+        return LVGLCJ_ERR_INVALID_ARGUMENT;
+    }
+
+    lv_textarea_set_text((lv_obj_t *)lvglcj_ptr_of(ta), txt);
+    return LVGLCJ_OK;
+}
+
+int32_t lvglcj_textarea_get_text(int64_t ta, char *buf, int32_t size)
+{
+    LVGLCJ_HANDLE_GUARD(ta, __func__);
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    const char *txt = lv_textarea_get_text((lv_obj_t *)lvglcj_ptr_of(ta));
+    if (txt == NULL) {
+        /* 语义上不该发生（LVGL 对空文本返回 ""），但这里若真拿到 NULL，
+         * 下面就是一次解引用 —— 一个 strlen 的代价换掉这种可能，是划算的。 */
+        txt = "";
+    }
+
+    size_t n = strlen(txt); /* strlen 由 lvglcj_internal.h 统一提供（见该处的说明） */
+
+    if (buf == NULL) {
+        return (int32_t)n; /* 探测用法：只回报所需长度 */
+    }
+    if (size <= (int32_t)n) {
+        /*
+         * 缓冲不足：**一个字都不写**并报错。
+         * 选择报错而不是截断，是因为截断的后果更隐蔽 ——
+         * 调用方会拿到一个语法完全合法、但内容被悄悄削短的字符串，
+         * 然后在很远的地方表现出"文本不对"。报错的代价只是多一次调用。
+         */
+        lvglcj_record_error(LVGLCJ_ERR_INVALID_ARGUMENT, ta, size, __func__,
+                            "缓冲不足：需要 文本字节数+1（含结尾 NUL）；本次未写入任何内容");
+        return LVGLCJ_ERR_INVALID_ARGUMENT;
+    }
+
+    memcpy(buf, txt, n);
+    buf[n] = '\0';
+    return (int32_t)n;
+}
+
+int32_t lvglcj_textarea_set_placeholder_text(int64_t ta, const char *txt)
+{
+    LVGLCJ_HANDLE_GUARD(ta, __func__);
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    if (txt == NULL) {
+        lvglcj_record_error(LVGLCJ_ERR_INVALID_ARGUMENT, ta, 0, __func__,
+                            "占位文本不能为空指针");
+        return LVGLCJ_ERR_INVALID_ARGUMENT;
+    }
+
+    lv_textarea_set_placeholder_text((lv_obj_t *)lvglcj_ptr_of(ta), txt);
+    return LVGLCJ_OK;
+}
+
+int32_t lvglcj_textarea_set_one_line(int64_t ta, int32_t on)
+{
+    LVGLCJ_HANDLE_GUARD(ta, __func__);
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    lv_textarea_set_one_line((lv_obj_t *)lvglcj_ptr_of(ta), on ? true : false);
+    return LVGLCJ_OK;
+}
+
+int32_t lvglcj_textarea_set_password_mode(int64_t ta, int32_t on)
+{
+    LVGLCJ_HANDLE_GUARD(ta, __func__);
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    lv_textarea_set_password_mode((lv_obj_t *)lvglcj_ptr_of(ta), on ? true : false);
+    return LVGLCJ_OK;
+}
+
+int32_t lvglcj_textarea_set_max_length(int64_t ta, int32_t len)
+{
+    LVGLCJ_HANDLE_GUARD(ta, __func__);
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    /* 底层收 uint32_t：负数会被隐式转成巨大的上限，等于"悄悄变成不限制" ——
+     * 与调用方想表达的正好相反，且不会有任何提示。0 则是 LVGL 的"不限制"约定，放行。 */
+    if (len < 0) {
+        lvglcj_record_error(LVGLCJ_ERR_INVALID_ARGUMENT, ta, len, __func__,
+                            "最大长度不能为负（0 才表示不限制）");
+        return LVGLCJ_ERR_INVALID_ARGUMENT;
+    }
+
+    lv_textarea_set_max_length((lv_obj_t *)lvglcj_ptr_of(ta), (uint32_t)len);
+    return LVGLCJ_OK;
+}
