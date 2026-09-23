@@ -565,6 +565,44 @@ public let LVGLCJ_KEYBOARD_MODE_TEXT_UPPER: Int32 = 1
 public let LVGLCJ_KEYBOARD_MODE_SPECIAL: Int32 = 2
 public let LVGLCJ_KEYBOARD_MODE_NUMBER: Int32 = 3
 
+/* ---------------- P1 批次 10：chart ----------------
+ *
+ * ★★ series 用**索引**（Int32）而不是指针，这一层是刻意加的：
+ *   lv_chart_series_t 不是 lv_obj_t（进不了对象句柄表，也就没有"对象被删时自动失效"
+ *   那套机制），而 lv_chart.h 又不公开结构体（拿不到 chart->series[i]，没法按索引回头问
+ *   LVGL）。于是由 C 侧按图表句柄维护索引表，指针不出那一层。
+ *   失效规则：图表被删（含级联）→ 索引不可用；remove_series → 该索引**永久**失效
+ *   （不回收，避免旧索引指向新序列）。
+ *
+ * ★ 坐标轴取值是**位标志**（0/1/2/4），不是连号 —— 写区间判断会错。
+ */
+foreign func lvglcj_chart_create(parent: Int64): Int64
+
+foreign func lvglcj_chart_set_type(chart: Int64, t: Int32): Int32
+
+foreign func lvglcj_chart_set_point_count(chart: Int64, cnt: Int32): Int32
+
+foreign func lvglcj_chart_get_point_count(chart: Int64): Int32
+
+foreign func lvglcj_chart_set_range(chart: Int64, axis: Int32, lo: Int32, hi: Int32): Int32
+
+foreign func lvglcj_chart_add_series(chart: Int64, color: UInt32, axis: Int32): Int32
+
+foreign func lvglcj_chart_remove_series(chart: Int64, idx: Int32): Int32
+
+foreign func lvglcj_chart_set_next_value(chart: Int64, idx: Int32, value: Int32): Int32
+
+foreign func lvglcj_chart_set_value_by_id(chart: Int64, idx: Int32, pointId: Int32, value: Int32): Int32
+
+public let LVGLCJ_CHART_TYPE_NONE: Int32 = 0
+public let LVGLCJ_CHART_TYPE_LINE: Int32 = 1
+public let LVGLCJ_CHART_TYPE_BAR: Int32 = 2
+public let LVGLCJ_CHART_TYPE_SCATTER: Int32 = 3
+public let LVGLCJ_CHART_AXIS_PRIMARY_Y: Int32 = 0
+public let LVGLCJ_CHART_AXIS_SECONDARY_Y: Int32 = 1
+public let LVGLCJ_CHART_AXIS_PRIMARY_X: Int32 = 2
+public let LVGLCJ_CHART_AXIS_SECONDARY_X: Int32 = 4
+
 /* ---------------- Canvas（§3.11.2）：自定义绘制的唯一出口 ----------------
  *
  * ★ 颜色参数的**解释方式在不同函数上不同**，调用方必须看清：

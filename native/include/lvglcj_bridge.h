@@ -811,6 +811,67 @@ int32_t lvglcj_keyboard_get_mode(int64_t kb);
 /* 按键弹出预览 */
 int32_t lvglcj_keyboard_set_popovers(int64_t kb, int32_t on);
 
+/* ============================================ 控件（P1 批次 10：chart）
+ *
+ * ★★ 本批需要一层**我们自己的 series 索引**，原因两条都是读出来的：
+ *   ① lv_chart_series_t 不是 lv_obj_t，进不了对象句柄表 —— 那张表的状态机建立在
+ *      "LVGL 对象"这个前提上（对象被删时 LVGL 派发事件、我们据此失效句柄）；
+ *      series 不是对象，没有这个机制。
+ *   ② lv_chart.h **不公开结构体**，拿不到 chart->series[i]，
+ *      所以也没法"按索引回头去问 LVGL"。
+ *   于是对外只暴露**索引**（int32），指针留在我方表里。
+ *
+ * ★ 索引的失效规则（每条都对应一个查证过的事实）：
+ *   · 图表被删除（含被父对象**级联**删掉）→ 索引不可用。
+ *     判据是每次使用前查图表句柄是否仍 ALIVE，而不是"我们记得删过" ——
+ *     级联删除不经过本层包装函数，只有句柄表知道对象已经没了。
+ *   · remove_series → 该索引永久失效。
+ *   · 索引**不回收**：移除后新加的 series 拿新索引，不复用旧号。
+ *     否则"旧索引指向新序列"会安静地给出错误数据 —— 比报错难查得多。
+ *     （代价是单个图表累计 add 次数有上限；索引表按需增长，无固定常量。）
+ *   ★ 槽位可安全回收：句柄 id 单调递增、永不复用（handle_table.c 的 ADR-001），
+ *     故"回收一个已死图表的槽位"不会被将来某个新图表命中。
+ */
+#define LVGLCJ_CHART_TYPE_NONE    0
+#define LVGLCJ_CHART_TYPE_LINE    1
+#define LVGLCJ_CHART_TYPE_BAR     2
+#define LVGLCJ_CHART_TYPE_SCATTER 3
+
+/* 坐标轴。★ 注意这是**位标志**取值：X 轴是 0x02/0x04，不是 2/3 那样连号。 */
+#define LVGLCJ_CHART_AXIS_PRIMARY_Y   0
+#define LVGLCJ_CHART_AXIS_SECONDARY_Y 1
+#define LVGLCJ_CHART_AXIS_PRIMARY_X   2
+#define LVGLCJ_CHART_AXIS_SECONDARY_X 4
+
+int64_t lvglcj_chart_create(int64_t parent);
+
+/* 图表类型（LVGLCJ_CHART_TYPE_*） */
+int32_t lvglcj_chart_set_type(int64_t chart, int32_t type);
+
+/* 数据点数。0 与负数被拒：点数决定内部数组尺寸，0 会得到一个没有数据点的图表。 */
+int32_t lvglcj_chart_set_point_count(int64_t chart, int32_t cnt);
+int32_t lvglcj_chart_get_point_count(int64_t chart);
+
+/* 坐标轴范围（axis 取 LVGLCJ_CHART_AXIS_*） */
+int32_t lvglcj_chart_set_range(int64_t chart, int32_t axis, int32_t min, int32_t max);
+
+/* 添加一条曲线，返回**索引**（>= 0）或负错误码。
+ * ★ axis 只接受 PRIMARY_Y / SECONDARY_Y：series 只能挂 Y 轴（LVGL 文档如此），
+ *   X 轴那两个取值只用于范围设置。 */
+int32_t lvglcj_chart_add_series(int64_t chart, uint32_t color, int32_t axis);
+
+/* 移除一条曲线。该索引**永久**失效（不回收，见上）。 */
+int32_t lvglcj_chart_remove_series(int64_t chart, int32_t idx);
+
+/* 追加一个点（按序推进） */
+int32_t lvglcj_chart_set_next_value(int64_t chart, int32_t idx, int32_t value);
+
+/* 按下标写一个点。
+ * ★ point_id 必须由本层校验：底层收 uint32_t 且**不检查范围**，
+ *   越界就是一次界外写（写坏的是 series 的 y_points 数组）——
+ *   它不报错，只会安静地破坏内存，属于最坏的一类输入。 */
+int32_t lvglcj_chart_set_value_by_id(int64_t chart, int32_t idx, int32_t point_id, int32_t value);
+
 /* ============================================================ §3.11.2 Canvas */
 int64_t lvglcj_canvas_create(int64_t parent);
 int32_t lvglcj_canvas_set_buffer(int64_t canvas, int32_t w, int32_t h);

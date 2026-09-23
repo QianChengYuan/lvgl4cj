@@ -595,6 +595,63 @@ class WidgetTests {
         rt.deinitLvgl()
     }
 
+    // ==================================================== 十五、P1 批次 10：chart
+
+    /*
+     * chart 是 P1 里唯一需要动"句柄层设计"的：series 不是对象，进不了句柄表，
+     * 所以本层自己维护索引。本用例钉的是这个索引的语义（它比接口本身更容易出错）：
+     *   · 图表被删除（含级联）后索引不可用；
+     *   · remove() 之后索引**永久**失效，新加的拿新索引 —— 旧索引不会悄悄指向新曲线；
+     *   · 点下标必须被校验（底层不检查，越界是界外写，属于最坏的一类输入）。
+     */
+    @TestCase
+    func testChartSeriesIndexContract(): Unit {
+        let rt = LvglRuntime()
+        let _ = rt.startHeadless(320, 240)
+        let ch = LvChart.create(LvObject.screenActive())
+
+        ch.setType(LVGLCJ_CHART_TYPE_LINE)
+        ch.setPointCount(4)
+        @Assert(ch.pointCount(), 4)
+        @Assert(throwsLvgl({=> ch.setPointCount(0) }), true)
+        ch.setRange(LVGLCJ_CHART_AXIS_PRIMARY_Y, 0, 100)
+
+        /* X 轴不能挂 series（LVGL 文档限定 Y 轴） */
+        @Assert(throwsLvgl({=> ch.addSeries(0x0000FF, axis: LVGLCJ_CHART_AXIS_PRIMARY_X) }), true)
+
+        let s0 = ch.addSeries(0xFF0000)
+        let s1 = ch.addSeries(0x00FF00, axis: LVGLCJ_CHART_AXIS_SECONDARY_Y)
+        @Assert(s0.index(), 0)
+        @Assert(s1.index(), 1)
+
+        s0.push(10)
+        s1.push(20)
+        s0.setValue(3, 42)
+        /* 点下标越界：底层不检查，必须由本层拦 */
+        @Assert(throwsLvgl({=> s0.setValue(4, 1) }), true)
+        @Assert(throwsLvgl({=> s0.setValue(-1, 1) }), true)
+
+        /* remove 后该索引永久失效；新加的拿新索引，不复用旧号 */
+        s1.remove()
+        @Assert(throwsLvgl({=> s1.push(5) }), true)
+        @Assert(throwsLvgl({=> s1.remove() }), true)
+        let s2 = ch.addSeries(0xFFFF00)
+        @Assert(s2.index(), 2)
+        s2.push(7)
+        s0.push(11) /* 原有曲线不受影响 */
+
+        /* 级联删除：图表没了，索引一并不可用 */
+        let box = LvObject.create(LvObject.screenActive())
+        let ch2 = LvChart.create(box)
+        let s20 = ch2.addSeries(0xFF00FF)
+        s20.push(1)
+        box.close()
+        @Assert(throwsLvgl({=> s20.push(1) }), true)
+
+        ch.close()
+        rt.deinitLvgl()
+    }
+
     // ==================================================== 六、Canvas（§3.11.2）
 
     /*

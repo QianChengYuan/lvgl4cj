@@ -1267,3 +1267,253 @@ int32_t lvglcj_keyboard_set_popovers(int64_t kb, int32_t on)
     lv_keyboard_set_popovers((lv_obj_t *)lvglcj_ptr_of(kb), on ? true : false);
     return LVGLCJ_OK;
 }
+
+/* ------------------------------------------------------------ chart */
+
+/*
+ * series 索引层。为什么必须有它、以及三条失效规则，见 lvglcj_bridge.h 的说明。
+ * 这里只强调实现上的两个要点：
+ *   · 槽位复用是安全的 —— 句柄 id 单调递增、永不复用（handle_table.c 的 ADR-001），
+ *     所以回收"已死图表的槽位"不会被将来的新图表命中；
+ *   · 槽位里的指针**只可能在图表仍 ALIVE 时被解引用**，因为每个入口都先走
+ *     LVGLCJ_HANDLE_GUARD —— 顺序在这里是有意义的，不能调换。
+ */
+typedef struct {
+    int64_t chart;
+    lv_chart_series_t **ser;
+    int32_t ser_cap;
+    int32_t ser_cnt; /* 已分配过的索引个数：只增不减（索引不回收） */
+} chart_slot_t;
+
+#define LVGLCJ_CHART_SLOTS 32
+static chart_slot_t g_chart_slots[LVGLCJ_CHART_SLOTS];
+
+static void chart_slot_clear(chart_slot_t *s)
+{
+    if (s->ser != NULL) {
+        free(s->ser); /* 这张表是我们自己的，不在 LVGL 内存池里，故用 free 而非 lv_free */
+    }
+    memset(s, 0, sizeof(*s));
+}
+
+static chart_slot_t *chart_slot_for(int64_t chart, const char *func)
+{
+    int32_t i;
+    int32_t free_idx = -1;
+
+    for (i = 0; i < LVGLCJ_CHART_SLOTS; i++) {
+        chart_slot_t *s = &g_chart_slots[i];
+        if (s->chart == chart) {
+            return s;
+        }
+        /* 空槽，或占用者已经死了（可安全回收 —— 句柄 id 永不复用，见上） */
+        if (free_idx < 0
+            && (s->chart == 0 || lvglcj_handle_state(s->chart) != LVGLCJ_HSTATE_ALIVE)) {
+            free_idx = i;
+        }
+    }
+
+    if (free_idx < 0) {
+        lvglcj_record_error(LVGLCJ_ERR_INVALID_ARGUMENT, chart, 0, func,
+                            "图表 series 索引槽位已满（同时存活的图表过多）");
+        return NULL;
+    }
+
+    chart_slot_clear(&g_chart_slots[free_idx]);
+    g_chart_slots[free_idx].chart = chart;
+    return &g_chart_slots[free_idx];
+}
+
+static chart_slot_t *chart_slot_find(int64_t chart)
+{
+    int32_t i;
+    for (i = 0; i < LVGLCJ_CHART_SLOTS; i++) {
+        if (g_chart_slots[i].chart == chart) {
+            return &g_chart_slots[i];
+        }
+    }
+    return NULL;
+}
+
+static lv_chart_series_t *chart_ser_at(int64_t chart, int32_t idx, const char *func)
+{
+    chart_slot_t *s = chart_slot_find(chart);
+
+    if (s == NULL || idx < 0 || idx >= s->ser_cnt) {
+        lvglcj_record_error(LVGLCJ_ERR_INVALID_ARGUMENT, chart, idx, func,
+                            "series 索引无效（该图表从未有过这个索引）");
+        return NULL;
+    }
+    if (s->ser[idx] == NULL) {
+        lvglcj_record_error(LVGLCJ_ERR_INVALID_ARGUMENT, chart, idx, func,
+                            "该 series 已被移除，索引不再有效（索引不回收，以免旧索引指向新序列）");
+        return NULL;
+    }
+    return s->ser[idx];
+}
+
+int64_t lvglcj_chart_create(int64_t parent)
+{
+    return widget_create_common(parent, __func__, lv_chart_create, "lv_chart_t");
+}
+
+int32_t lvglcj_chart_set_type(int64_t chart, int32_t type)
+{
+    LVGLCJ_HANDLE_GUARD(chart, __func__);
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    if (type < 0 || type > LVGLCJ_CHART_TYPE_SCATTER) {
+        lvglcj_record_error(LVGLCJ_ERR_INVALID_ARGUMENT, chart, type, __func__,
+                            "类型取值越界（0=NONE 1=LINE 2=BAR 3=SCATTER）");
+        return LVGLCJ_ERR_INVALID_ARGUMENT;
+    }
+
+    lv_chart_set_type((lv_obj_t *)lvglcj_ptr_of(chart), (lv_chart_type_t)type);
+    return LVGLCJ_OK;
+}
+
+int32_t lvglcj_chart_set_point_count(int64_t chart, int32_t cnt)
+{
+    LVGLCJ_HANDLE_GUARD(chart, __func__);
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    /* 点数决定 series 内部数组的尺寸，负数转 uint32_t 会变成约 42 亿，
+     * 0 则得到一个没有数据点的图表 —— 两者都没有意义。 */
+    if (cnt <= 0) {
+        lvglcj_record_error(LVGLCJ_ERR_INVALID_ARGUMENT, chart, cnt, __func__,
+                            "点数必须为正（它决定内部数组尺寸）");
+        return LVGLCJ_ERR_INVALID_ARGUMENT;
+    }
+
+    lv_chart_set_point_count((lv_obj_t *)lvglcj_ptr_of(chart), (uint32_t)cnt);
+    return LVGLCJ_OK;
+}
+
+int32_t lvglcj_chart_get_point_count(int64_t chart)
+{
+    LVGLCJ_HANDLE_GUARD(chart, __func__);
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    return (int32_t)lv_chart_get_point_count((lv_obj_t *)lvglcj_ptr_of(chart));
+}
+
+int32_t lvglcj_chart_set_range(int64_t chart, int32_t axis, int32_t min, int32_t max)
+{
+    LVGLCJ_HANDLE_GUARD(chart, __func__);
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    /* 轴取值是位标志（0/1/2/4），不是连号 —— 所以这里显式枚举，不能写成区间判断 */
+    if (axis != LVGLCJ_CHART_AXIS_PRIMARY_Y && axis != LVGLCJ_CHART_AXIS_SECONDARY_Y
+        && axis != LVGLCJ_CHART_AXIS_PRIMARY_X && axis != LVGLCJ_CHART_AXIS_SECONDARY_X) {
+        lvglcj_record_error(LVGLCJ_ERR_INVALID_ARGUMENT, chart, axis, __func__,
+                            "轴取值非法（0=PRIMARY_Y 1=SECONDARY_Y 2=PRIMARY_X 4=SECONDARY_X）");
+        return LVGLCJ_ERR_INVALID_ARGUMENT;
+    }
+
+    lv_chart_set_range((lv_obj_t *)lvglcj_ptr_of(chart), (lv_chart_axis_t)axis, min, max);
+    return LVGLCJ_OK;
+}
+
+int32_t lvglcj_chart_add_series(int64_t chart, uint32_t color, int32_t axis)
+{
+    LVGLCJ_HANDLE_GUARD(chart, __func__);
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    /* series 只能挂 Y 轴（LVGL 文档明确写了 PRIMARY_Y / SECONDARY_Y）。
+     * X 轴那两个取值只用于范围设置 —— 拦下比让 LVGL 默默接受更清楚。 */
+    if (axis != LVGLCJ_CHART_AXIS_PRIMARY_Y && axis != LVGLCJ_CHART_AXIS_SECONDARY_Y) {
+        lvglcj_record_error(LVGLCJ_ERR_INVALID_ARGUMENT, chart, axis, __func__,
+                            "series 只能挂在 PRIMARY_Y(0) 或 SECONDARY_Y(1) 上");
+        return LVGLCJ_ERR_INVALID_ARGUMENT;
+    }
+
+    chart_slot_t *s = chart_slot_for(chart, __func__);
+    if (s == NULL) {
+        return LVGLCJ_ERR_INVALID_ARGUMENT;
+    }
+
+    if (s->ser_cnt == s->ser_cap) {
+        int32_t ncap = (s->ser_cap == 0) ? 4 : s->ser_cap * 2;
+        lv_chart_series_t **n =
+            (lv_chart_series_t **)realloc(s->ser, (size_t)ncap * sizeof(*n));
+        if (n == NULL) {
+            lvglcj_record_error(LVGLCJ_ERR_INVALID_ARGUMENT, chart, 0, __func__,
+                                "series 索引表扩容失败（内存不足）");
+            return LVGLCJ_ERR_INVALID_ARGUMENT;
+        }
+        memset(&n[s->ser_cap], 0, (size_t)(ncap - s->ser_cap) * sizeof(*n));
+        s->ser = n;
+        s->ser_cap = ncap;
+    }
+
+    /* 颜色约定与 canvas/led 一致：调用方给 0xRRGGBB，这里按 lv_color_hex 转 */
+    lv_chart_series_t *ser = lv_chart_add_series((lv_obj_t *)lvglcj_ptr_of(chart),
+                                                 lv_color_hex(color & 0xFFFFFFu),
+                                                 (lv_chart_axis_t)axis);
+    if (ser == NULL) {
+        lvglcj_record_error(LVGLCJ_ERR_INVALID_ARGUMENT, chart, 0, __func__,
+                            "lv_chart_add_series 返回 NULL（LVGL 内存池已满）");
+        return LVGLCJ_ERR_INVALID_ARGUMENT;
+    }
+
+    s->ser[s->ser_cnt] = ser;
+    return s->ser_cnt++; /* 返回索引，而不是指针 —— 指针不出这一层 */
+}
+
+int32_t lvglcj_chart_remove_series(int64_t chart, int32_t idx)
+{
+    LVGLCJ_HANDLE_GUARD(chart, __func__);
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    lv_chart_series_t *ser = chart_ser_at(chart, idx, __func__);
+    if (ser == NULL) {
+        return LVGLCJ_ERR_INVALID_ARGUMENT;
+    }
+
+    lv_chart_remove_series((lv_obj_t *)lvglcj_ptr_of(chart), ser);
+
+    /* 立刻置空：LVGL 已经把这块内存释放了，绝不能留下一个还能被取到的指针。
+     * 置空而不回收索引 —— 理由见 chart_ser_at。 */
+    chart_slot_find(chart)->ser[idx] = NULL;
+    return LVGLCJ_OK;
+}
+
+int32_t lvglcj_chart_set_next_value(int64_t chart, int32_t idx, int32_t value)
+{
+    LVGLCJ_HANDLE_GUARD(chart, __func__);
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    lv_chart_series_t *ser = chart_ser_at(chart, idx, __func__);
+    if (ser == NULL) {
+        return LVGLCJ_ERR_INVALID_ARGUMENT;
+    }
+
+    lv_chart_set_next_value((lv_obj_t *)lvglcj_ptr_of(chart), ser, value);
+    return LVGLCJ_OK;
+}
+
+int32_t lvglcj_chart_set_value_by_id(int64_t chart, int32_t idx, int32_t point_id, int32_t value)
+{
+    LVGLCJ_HANDLE_GUARD(chart, __func__);
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    lv_chart_series_t *ser = chart_ser_at(chart, idx, __func__);
+    if (ser == NULL) {
+        return LVGLCJ_ERR_INVALID_ARGUMENT;
+    }
+
+    /*
+     * ★ 点数必须自己校验：底层收 uint32_t 的 id 且**不检查范围**，
+     *   越界就是一次界外写（写坏的是 series 的 y_points 数组）。
+     *   这类输入最坏 —— 它不报错，只安静地破坏内存。
+     */
+    int32_t cnt = (int32_t)lv_chart_get_point_count((lv_obj_t *)lvglcj_ptr_of(chart));
+    if (point_id < 0 || point_id >= cnt) {
+        lvglcj_record_error(LVGLCJ_ERR_INVALID_ARGUMENT, chart, point_id, __func__,
+                            "数据点下标超出当前点数（点数见 lvglcj_chart_set_point_count）");
+        return LVGLCJ_ERR_INVALID_ARGUMENT;
+    }
+
+    lv_chart_set_value_by_id((lv_obj_t *)lvglcj_ptr_of(chart), ser, (uint32_t)point_id, value);
+    return LVGLCJ_OK;
+}

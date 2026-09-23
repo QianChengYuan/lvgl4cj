@@ -79,10 +79,10 @@ main() {
 | --- | --- |
 | L1 模块（`src/*.cj`，不含测试） | **19** |
 | C 侧实现（`native/src/*.c`） | **22** |
-| ABI 声明函数 | **269**（已实现 **269**，未实现 **0** —— 自检为「声明与产物完全一致」） |
-| 仓颉侧 `foreign` 声明 | **286** |
-| C 用例 | **10 个可执行 / 588 项检查** |
-| 仓颉测试 | **82 用例（81 通过 / 1 跳过 / 0 失败）** |
+| ABI 声明函数 | **278**（已实现 **278**，未实现 **0** —— 自检为「声明与产物完全一致」） |
+| 仓颉侧 `foreign` 声明 | **287** |
+| C 用例 | **10 个可执行 / 622 项检查** |
+| 仓颉测试 | **83 用例（82 通过 / 1 跳过 / 0 失败）** |
 
 已具备的能力（摘要）：
 
@@ -97,9 +97,9 @@ main() {
   `LvSwitch` / `LvCheckbox` / `LvBar`，P1 批次 2 的 `LvSlider` / `LvArc` /
   `LvLed` / `LvSpinner`，P1 批次 3 的 `LvDropdown`，P1 批次 4 的 `LvLine`，
   P1 批次 5 的 `LvImage`，P1 批次 6 的 `LvRoller`，P1 批次 7 的 `LvTextarea`，
-  P1 批次 8 的 `LvTable`，P1 批次 9 的 `LvKeyboard`，
+  P1 批次 8 的 `LvTable`，P1 批次 9 的 `LvKeyboard`，P1 批次 10 的 `LvChart`，
   以及 `LvCanvas`（自定义绘制的唯一出口，§3.11.2）。
-  **共 18 个**，P1 清单其余 1 个见「已知边界」
+  **共 19 个** —— 设计文档 §7.1 的 P1 清单**已全部完成**
 - **可观测性**：`LvDebug`（`objCount` / `memMonitor` / `perfSample` / `dumpTree`）、`LvBench`（性能测量）
 
 ---
@@ -155,11 +155,21 @@ main() {
      canvas 函数**，不含 polygon —— 以头文件为契约记录，故不实现（需要时应走契约变更）。
    另注意颜色参数的**解释方式不一致**：绘制类与 `fillBg` 是 `0xRRGGBB`（高 8 位不解释，
    透明度走 `opa`），而 `setPalette` 是 `0xAARRGGBB`（调色板项自带 alpha）。
-2. **控件 18 个**：`LvObject`（基类）、`LvLabel`、`LvButton`、`LvSwitch`、
+2. **控件 19 个**：`LvObject`（基类）、`LvLabel`、`LvButton`、`LvSwitch`、
    `LvCheckbox`、`LvBar`、`LvSlider`、`LvArc`、`LvLed`、`LvSpinner`、
    `LvDropdown`、`LvLine`、`LvImage`、`LvRoller`、`LvTextarea`、`LvTable`、
-   `LvKeyboard`、`LvCanvas`。
-   设计文档 §7.1 的 P1 清单还剩 **1 个**未做：`chart`。
+   `LvKeyboard`、`LvChart`、`LvCanvas`。
+   设计文档 §7.1 的 **P1 清单已全部完成**（10 个批次、19 个控件）。
+
+   ★ `LvChart` 的 series 用**索引**标识而不是指针 —— 这是本项目唯一一处自己维护的索引。
+   原因两条：`lv_chart_series_t` 不是 `lv_obj_t`（进不了对象句柄表，也就没有"对象被删时
+   自动失效"那套机制），而 `lv_chart.h` **不公开结构体**（拿不到 `chart->series[i]`，
+   没法按索引回头问 LVGL）。
+   由此有两条使用者必须知道的后果：**图表被删除（含被父对象级联删掉）后，它的 series
+   索引一律不可用**；**`remove()` 之后该索引永久失效**，新加的曲线拿新索引、**不复用
+   旧号** —— 这个取舍是刻意的：让"旧索引悄悄指向新曲线、于是安静地画出错数据"不可能发生。
+   （判据用的是"图表句柄是否仍 ALIVE"而不是"我们记得删过"，因为级联删除不经过我们的
+   包装函数。）
 
    ★ 使用 `LvKeyboard` 有一条必须遵守的契约：**删除 textarea 之前要先
    `clearTextarea()`**。LVGL 不会在 textarea 被删时清理这条绑定（读实现确认：

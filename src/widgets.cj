@@ -1163,6 +1163,152 @@ public class LvKeyboard <: LvObject {
     }
 }
 
+/*
+ * ===================== P1 批次 10：chart =====================
+ * 这是 P1 清单里唯一需要动"句柄层设计"的一个：series 不是对象。
+ *
+ * ★ 对外用**索引**而不是指针，理由见 ffi_bridge.cj 的说明。对使用者而言有两条后果
+ *   必须知道（都写进了下面各方法的文档）：
+ *     · 图表被删除（含被父对象级联删掉）后，它的 series 索引一律不可用；
+ *     · remove() 之后该索引**永久**失效，新加的 series 会拿到新的索引 ——
+ *       旧索引不会"悄悄指向新曲线"。这个取舍是刻意的：报错比给出错误数据好。
+ */
+
+/// 图表
+public class LvChart <: LvObject {
+    private init(h: Int64) {
+        super(h)
+    }
+
+    /**
+     * 创建一个 chart。
+     *
+     * @throws[LvglException] 同 LvSwitch.create
+     */
+    public static func create(parent: LvObject): LvChart {
+        ensureLvglOwnership()
+        let h = unsafe { lvglcj_chart_create(parent.handle) }
+        if (h <= 0) {
+            throw LvglException(OutOfMemory, "chart 创建失败（LVGL 内存池已满，或未启动显示导致没有默认屏幕）")
+        }
+        return LvChart(h)
+    }
+
+    /**
+     * 图表类型（LVGLCJ_CHART_TYPE_*）
+     *
+     * @throws[LvglException] InvalidArgument —— 取值越界
+     */
+    public func setType(t: Int32): LvChart {
+        throwIfError(unsafe { lvglcj_chart_set_type(handle, t) }, "chart.setType")
+        return this
+    }
+
+    /**
+     * 数据点数。
+     *
+     * @throws[LvglException] InvalidArgument —— 非正（点数决定内部数组尺寸）
+     */
+    public func setPointCount(cnt: Int32): LvChart {
+        throwIfError(unsafe { lvglcj_chart_set_point_count(handle, cnt) }, "chart.setPointCount")
+        return this
+    }
+
+    /**
+     * 当前点数
+     *
+     * @throws[LvglException] InvalidArgument —— 句柄失效
+     */
+    public func pointCount(): Int32 {
+        let n = unsafe { lvglcj_chart_get_point_count(handle) }
+        if (n < 0) {
+            throw LvglException(InvalidArgument, "chart.pointCount 失败")
+        }
+        return n
+    }
+
+    /**
+     * 设置坐标轴范围。
+     *
+     * ★ 轴取值是**位标志**（0/1/2/4），不是连号 —— 见 LVGLCJ_CHART_AXIS_*。
+     *
+     * @throws[LvglException] InvalidArgument —— 轴取值非法
+     */
+    public func setRange(axis: Int32, lo: Int32, hi: Int32): LvChart {
+        throwIfError(unsafe { lvglcj_chart_set_range(handle, axis, lo, hi) }, "chart.setRange")
+        return this
+    }
+
+    /**
+     * 添加一条曲线，返回它的句柄对象。
+     *
+     * ★ 曲线只能挂在 Y 轴上（`LVGLCJ_CHART_AXIS_PRIMARY_Y` / `_SECONDARY_Y`）。
+     *
+     * @throws[LvglException] InvalidArgument —— 轴取值不是 Y 轴
+     */
+    public func addSeries(color: UInt32, axis!: Int32 = LVGLCJ_CHART_AXIS_PRIMARY_Y): LvChartSeries {
+        let idx = unsafe { lvglcj_chart_add_series(handle, color, axis) }
+        if (idx < 0) {
+            throw LvglException(InvalidArgument, "chart.addSeries 失败（轴取值须为 Y 轴，或 LVGL 内存池已满）")
+        }
+        return LvChartSeries(handle, idx)
+    }
+}
+
+/**
+ * 图表中的一条曲线。
+ *
+ * 它**不是** `LvObject` —— 在 LVGL 里 series 不是对象。本层用一个索引来标识它，
+ * 索引由所属图表负责解释，所以这个对象只在"图表仍然存活"期间有意义。
+ */
+public class LvChartSeries {
+    private let chartHandle: Int64
+    private let idx: Int32
+
+    init(chartHandle: Int64, idx: Int32) {
+        this.chartHandle = chartHandle
+        this.idx = idx
+    }
+
+    /// 这条曲线在所属图表中的索引（从 0 开始）
+    public func index(): Int32 {
+        return idx
+    }
+
+    /**
+     * 追加一个数据点（按序推进）。
+     *
+     * @throws[LvglException] InvalidArgument —— 图谱已删除，或该索引已被移除
+     */
+    public func push(value: Int32): LvChartSeries {
+        throwIfError(unsafe { lvglcj_chart_set_next_value(chartHandle, idx, value) }, "chartSeries.push")
+        return this
+    }
+
+    /**
+     * 按下标写一个数据点。
+     *
+     * @throws[LvglException] InvalidArgument —— 点下标越界（底层不检查，越界是界外写），
+     *   或图谱已删除、该索引已被移除
+     */
+    public func setValue(pointId: Int32, value: Int32): LvChartSeries {
+        throwIfError(unsafe { lvglcj_chart_set_value_by_id(chartHandle, idx, pointId, value) }, "chartSeries.setValue")
+        return this
+    }
+
+    /**
+     * 移除这条曲线。
+     *
+     * ★ 移除后**该索引永久失效**：新添加的曲线会拿到新索引，不会复用这个号。
+     *   这是刻意的取舍 —— 让"旧索引指向新曲线、于是静默画出错数据"不可能发生。
+     *
+     * @throws[LvglException] InvalidArgument —— 图谱已删除，或该索引已被移除
+     */
+    public func remove(): Unit {
+        throwIfError(unsafe { lvglcj_chart_remove_series(chartHandle, idx) }, "chartSeries.remove")
+    }
+}
+
 /// 忙碌指示器
 public class LvSpinner <: LvObject {
     private init(h: Int64) {

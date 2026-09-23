@@ -829,6 +829,80 @@ int main(void)
         CHECK(lvglcj_handle_state(kb) != LVGLCJ_HSTATE_ALIVE, "删除后不再报告 ALIVE");
     }
 
+    /* ================================================== 7l. P1 批次 10：chart
+     *
+     * 本段钉的是 series **索引层**的语义（这是本项目唯一一处自己维护的索引）：
+     *   · 未添加过 → 索引无效；已移除 → 该索引**永久**失效，且新加的不复用旧号；
+     *   · 图表被**级联**删除后索引也不可用（判据是图表句柄是否仍 ALIVE，
+     *     而不是"我们记得删过"——级联删除不经过我们的包装函数）；
+     *   · X 轴不能挂 series；点下标必须本层校验（底层不检查，越界是界外写）。
+     */
+    printf("\n-- 7l. P1 批次 10 控件（chart）--\n");
+    {
+        int64_t ch = lvglcj_chart_create(scr);
+        CHECK(ch != 0, "创建 chart");
+
+        CHECK(lvglcj_chart_set_type(ch, LVGLCJ_CHART_TYPE_LINE) == LVGLCJ_OK, "设为折线图");
+        CHECK(lvglcj_chart_set_type(ch, 99) == LVGLCJ_ERR_INVALID_ARGUMENT, "非法类型被拒");
+        CHECK(lvglcj_chart_set_type(ch, -1) == LVGLCJ_ERR_INVALID_ARGUMENT, "负类型被拒");
+
+        CHECK(lvglcj_chart_set_point_count(ch, 4) == LVGLCJ_OK, "点数设为 4");
+        CHECK(lvglcj_chart_get_point_count(ch) == 4, "★ 点数读回为 4");
+        CHECK(lvglcj_chart_set_point_count(ch, 0) == LVGLCJ_ERR_INVALID_ARGUMENT, "点数 0 被拒");
+        CHECK(lvglcj_chart_set_point_count(ch, -1) == LVGLCJ_ERR_INVALID_ARGUMENT, "负点数被拒");
+
+        CHECK(lvglcj_chart_set_range(ch, LVGLCJ_CHART_AXIS_PRIMARY_Y, 0, 100) == LVGLCJ_OK, "设 Y 范围");
+        CHECK(lvglcj_chart_set_range(ch, LVGLCJ_CHART_AXIS_PRIMARY_X, 0, 50) == LVGLCJ_OK, "设 X 范围");
+        CHECK(lvglcj_chart_set_range(ch, 3, 0, 1) == LVGLCJ_ERR_INVALID_ARGUMENT,
+              "★ 轴取值 3 被拒（轴是位标志 0/1/2/4，不是连号 —— 区间判断会放过它）");
+
+        /* 索引语义 */
+        CHECK(lvglcj_chart_set_next_value(ch, 0, 1) == LVGLCJ_ERR_INVALID_ARGUMENT,
+              "★ 尚未添加任何 series 时索引 0 无效");
+        CHECK(lvglcj_chart_add_series(ch, 0xFF0000, LVGLCJ_CHART_AXIS_PRIMARY_Y) == 0,
+              "★ 添加 series → 索引 0");
+        CHECK(lvglcj_chart_add_series(ch, 0x00FF00, LVGLCJ_CHART_AXIS_SECONDARY_Y) == 1,
+              "★ 添加 series → 索引 1");
+        CHECK(lvglcj_chart_add_series(ch, 0x0000FF, LVGLCJ_CHART_AXIS_PRIMARY_X)
+                  == LVGLCJ_ERR_INVALID_ARGUMENT,
+              "★ X 轴不能挂 series");
+        CHECK(lvglcj_chart_add_series(ch, 0, 99) == LVGLCJ_ERR_INVALID_ARGUMENT, "非法轴被拒");
+
+        CHECK(lvglcj_chart_set_next_value(ch, 0, 10) == LVGLCJ_OK, "series 0 追加一个点");
+        CHECK(lvglcj_chart_set_next_value(ch, 1, 20) == LVGLCJ_OK, "series 1 追加一个点");
+        CHECK(lvglcj_chart_set_value_by_id(ch, 0, 3, 42) == LVGLCJ_OK, "series 0 按下标写点");
+        CHECK(lvglcj_chart_set_value_by_id(ch, 0, 4, 42) == LVGLCJ_ERR_INVALID_ARGUMENT,
+              "★★ 点下标越界被拒（底层不检查，越界就是界外写）");
+        CHECK(lvglcj_chart_set_value_by_id(ch, 0, -1, 42) == LVGLCJ_ERR_INVALID_ARGUMENT,
+              "负点下标被拒");
+
+        /* 移除：索引永久失效，且新加的不复用旧号 */
+        CHECK(lvglcj_chart_remove_series(ch, 1) == LVGLCJ_OK, "移除 series 1");
+        CHECK(lvglcj_chart_set_next_value(ch, 1, 5) == LVGLCJ_ERR_INVALID_ARGUMENT,
+              "★★ 已移除的索引永久失效（不是野指针，也不是静默复用）");
+        CHECK(lvglcj_chart_set_value_by_id(ch, 1, 0, 5) == LVGLCJ_ERR_INVALID_ARGUMENT,
+              "★★ 已移除的索引在其它入口同样失效");
+        CHECK(lvglcj_chart_add_series(ch, 0xFFFF00, LVGLCJ_CHART_AXIS_PRIMARY_Y) == 2,
+              "★★ 新 series 拿新索引 2（不回收旧号，避免旧索引指向新曲线）");
+        CHECK(lvglcj_chart_set_next_value(ch, 2, 7) == LVGLCJ_OK, "新 series 可用");
+        CHECK(lvglcj_chart_set_next_value(ch, 0, 11) == LVGLCJ_OK, "原有 series 0 不受影响");
+        CHECK(lvglcj_chart_remove_series(ch, 1) == LVGLCJ_ERR_INVALID_ARGUMENT,
+              "重复移除同一索引被拒");
+
+        /* 级联删除：图表没了，索引一并不可用 */
+        int64_t box = lvglcj_obj_create(scr);
+        int64_t ch2 = lvglcj_chart_create(box);
+        CHECK(lvglcj_chart_add_series(ch2, 0xFF00FF, LVGLCJ_CHART_AXIS_PRIMARY_Y) == 0,
+              "子图表添加 series");
+        CHECK(lvglcj_chart_set_next_value(ch2, 0, 1) == LVGLCJ_OK, "子图表 series 可用");
+        CHECK(lvglcj_obj_delete(box) == LVGLCJ_OK, "删除父对象（级联删除图表）");
+        CHECK(lvglcj_chart_set_next_value(ch2, 0, 1) < 0,
+              "★★ 图表被级联删除后 series 索引不可用（判据是图表句柄是否仍 ALIVE）");
+
+        CHECK(lvglcj_obj_delete(ch) == LVGLCJ_OK, "删除 chart");
+        CHECK(lvglcj_handle_state(ch) != LVGLCJ_HSTATE_ALIVE, "删除后不再报告 ALIVE");
+    }
+
     /* ================================================== 8. 清理顺序 */
     printf("\n-- 8. 清理 --\n");
     /*
