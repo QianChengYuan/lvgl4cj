@@ -93,6 +93,19 @@ public class Sdl2Backend {
         unsafe { lvglcj_sdl2_wait_timeout_count() }
     }
 
+    /**
+     * 渲染事件与暂存数据序号不匹配的次数。正常应**恒为 0**。
+     *
+     * 非 0 的含义很具体：某次 flush 的等待被提前满足了（等到的是**上一次**留下的额度），
+     * 于是它覆盖的条带没被渲染、也从此不会再被重画 —— 画面上表现为残留旧像素
+     * （滚动之后出现"重影"：同一控件出现在多个位置）。
+     * 后端已确保这种不匹配**不会画错位置**（只按暂存区自带的矩形应用），
+     * 但计数增长仍说明协议漏过一次，值得追。
+     */
+    public func staleApplyCount(): Int32 {
+        unsafe { lvglcj_sdl2_stale_apply_count() }
+    }
+
     /// 窗口是否已关闭/最小化（此时后端暂停渲染并立即放行等待方）
     public func isPaused(): Bool {
         unsafe { lvglcj_sdl2_is_paused() } != 0

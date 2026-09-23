@@ -227,6 +227,23 @@ static int32_t     g_upd_pitch = 0;
 static _Atomic int g_upd_valid = 0;
 
 /*
+ * ★★ 暂存数据的**序号**，以及它与渲染事件里那个序号的比对。
+ *
+ *   为什么需要：暂存区是共享的（只有一块）。若某次 flush 的等待提前返回
+ *   （成因见 sdl2_flush_sink 里 sdl2_reset_done 的说明），LVGL 会以为本帧已显示、
+ *   继续跑下一帧，而下一次 flush 会**覆盖**这块暂存区 —— 此时留在队列里的旧事件
+ *   若还按"旧事件的矩形"去贴，就会把新像素画到旧位置上。
+ *
+ *   现在：事件带上投递时的序号；渲染侧只按**暂存区自带的矩形**应用（天然自洽），
+ *   序号不一致只记一笔 —— 它意味着协议漏过一次，而不意味着画面会画错。
+ *   这个计数是给使用者看的（示例的统计行里就是 staleApply 那一项）：
+ *   它长期为 0 才说明"等待额度的配对"真的从未漏过。
+ */
+static _Atomic uint32_t g_upd_seq = 0;     /* 当前暂存数据的序号 */
+static _Atomic uint32_t g_stage_gen = 0;   /* 每次 stage 递增，作为序号来源 */
+static _Atomic int32_t  g_stale_apply = 0; /* 事件序号与暂存序号不一致的次数 */
+
+/*
  * ★ 暂存区是**后端自己的**，拷的是像素内容，不是 LVGL 缓冲的地址。
  *
  *   第一版保存的是 `px_map` 指针，并依赖"flush 随后会阻塞等渲染完成"来保证
@@ -322,9 +339,35 @@ static void sdl2_flush_sink(int64_t disp, const lv_area_t *area, uint8_t *px_map
     /* 双线程（方案 A）：投递渲染请求，然后有界等待 */
     atomic_store(&g_pending, 1);
     {
+        uint32_t seq = atomic_fetch_add(&g_stage_gen, 1) + 1;
+        atomic_store(&g_upd_seq, seq);
+
         SDL_Event ev;
         memset(&ev, 0, sizeof(ev));
         ev.type = g_render_event;
+        ev.user.code = (int32_t)seq; /* 带上本次暂存的序号，供渲染侧比对 */
+
+        /*
+         * ★★ 先清掉可能残留的额度，再投递我们自己的请求。
+         *
+         *   额度是**单标志（合并语义，不计数）**，sdl2_wait_done 上方的注释写明它成立的
+         *   前提是「同一时刻最多只有一个未决额度」。但这个前提实际上**不成立** ——
+         *   除了渲染完成，还有两处会 signal：
+         *     · sdl2_mark_paused()（窗口最小化/关闭）；
+         *     · 等待**超时**之后迟到的渲染（额度无人认领，留在标志里）。
+         *   残留额度会让下面这次等待被**立刻**满足 —— flush 提前返回并回报
+         *   flush_ready，LVGL 据此认为本帧已显示，于是继续下一帧；而本帧其实从未渲染，
+         *   它覆盖的条带此后也不会再被重画。
+         *
+         *   表现（实测于全控件示例）：滚动之后画面上出现**重影** —— 同一个键盘的按键行
+         *   出现在多个 y 位置、同一张卡片的标题出现两次，因为那些旧位置的像素从未被覆盖。
+         *   视觉上很像"控件抖动"，但成因完全不同：不是位置在抖，是旧像素没被清掉。
+         *
+         *   清零是安全的：本线程此刻最多只有一个未决请求（flush 是串行的，
+         *   上一次的等待已经返回），所以不可能误清"属于别人"的额度。
+         */
+        sdl2_reset_done();
+
         if (SDL_PushEvent(&ev) != 1) {
             /* 事件队列满：主线程已跟不上。记录后仍要走放行路径，不能卡住 */
             lvglcj_record_error(LVGLCJ_ERR_BACKEND_FAILURE, disp, 0, __func__,
@@ -555,6 +598,9 @@ int32_t lvglcj_sdl2_deinit(void)
     atomic_store(&g_flush_count, 0);
     atomic_store(&g_present_count, 0);
     atomic_store(&g_wait_timeout_count, 0);
+    atomic_store(&g_stale_apply, 0);
+    atomic_store(&g_upd_seq, 0);
+    atomic_store(&g_stage_gen, 0);
 
     /* 渲染暂存区归后端所有，随会话释放 —— 不清掉就是每次 init/deinit 漏一块 */
     free(g_upd_stage);
@@ -590,6 +636,17 @@ int32_t lvglcj_sdl2_poll_events(void)
             }
             /* ★ 顺序要紧：先上传（在主线程上做，见 sdl2_apply_texture_update 的说明），
              *   再渲染、再唤醒等待方 —— 唤醒意味着"本帧已经用上了这块像素"，  */
+            /*
+             * ★ 事件带的是投递时暂存数据的序号。若当前序号更大，说明这期间又 stage 过
+             *   一次 —— 也就是**上一次等待提前返回过**（协议漏了一次）。这里只记一笔：
+             *   sdl2_apply_texture_update 永远按暂存区**自带的矩形**应用，
+             *   所以"新像素贴到旧矩形上"这种画错在结构上不可能发生。
+             *   这个计数是使用者的判据：长期为 0 才说明额度配对从未漏过。
+             */
+            if (ev.user.code != (int32_t)atomic_load(&g_upd_seq)) {
+                atomic_fetch_add(&g_stale_apply, 1);
+            }
+
             sdl2_apply_texture_update(LVGLCJ_HANDLE_NULL);
             sdl2_render_now();
             atomic_store(&g_pending, 0);
@@ -644,6 +701,18 @@ int32_t lvglcj_sdl2_flush_count(void)
 int32_t lvglcj_sdl2_present_count(void)
 {
     return atomic_load(&g_present_count);
+}
+
+/*
+ * 渲染事件与暂存数据**序号不匹配**的次数。
+ *
+ * 这是"等待额度配对"是否漏过的判据：长期为 0 = 每次 flush 都等到的是**自己那次**渲染；
+ * 一旦增长，说明有过一次提前返回 —— 那次覆盖的条带不会再被重画（残影）。
+ * 它同时是一个回归哨兵：@see sdl2_flush_sink 里 sdl2_reset_done 的说明。
+ */
+int32_t lvglcj_sdl2_stale_apply_count(void)
+{
+    return atomic_load(&g_stale_apply);
 }
 
 int32_t lvglcj_sdl2_wait_timeout_count(void)

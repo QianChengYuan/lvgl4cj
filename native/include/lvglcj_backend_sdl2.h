@@ -70,6 +70,11 @@ int32_t lvglcj_sdl2_feed_indev(void);
 int32_t lvglcj_sdl2_flush_count(void);        /* flush sink 被调用次数 */
 int32_t lvglcj_sdl2_present_count(void);      /* 真正 Present 的次数 */
 int32_t lvglcj_sdl2_wait_timeout_count(void); /* 有界等待超时次数（正常应恒为 0） */
+
+/* 渲染事件与暂存数据**序号不匹配**的次数。
+ * 判据：长期为 0 = 每次 flush 都等到的是自己那次渲染；
+ * 增长 = 有过提前返回，那次覆盖的条带不会重画（画面残留旧像素）。 */
+int32_t lvglcj_sdl2_stale_apply_count(void);
 int32_t lvglcj_sdl2_is_paused(void);          /* 窗口关闭/最小化后为 1 */
 int32_t lvglcj_sdl2_is_render_thread(void);   /* 当前线程是否为渲染线程 */
 

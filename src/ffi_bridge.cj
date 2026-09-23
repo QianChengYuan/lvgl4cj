@@ -261,6 +261,10 @@ foreign func lvglcj_sdl2_present_count(): Int32
 
 foreign func lvglcj_sdl2_wait_timeout_count(): Int32
 
+/* 渲染事件与暂存数据序号不匹配的次数（正常恒为 0）。
+ * 非 0 = 某次 flush 的等待被提前满足过，那条带的内容不会再被重画（画面残留旧像素）。 */
+foreign func lvglcj_sdl2_stale_apply_count(): Int32
+
 foreign func lvglcj_sdl2_is_paused(): Int32
 
 foreign func lvglcj_sdl2_is_render_thread(): Int32

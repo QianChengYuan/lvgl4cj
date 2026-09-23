@@ -163,7 +163,15 @@ main(args: Array<String>) {
         println("            原因：内置 CJK 字体 lv_font_simsun_16_cjk 只覆盖 1000 个常用字")
         println("            要显示任意中文：启用 LV_USE_TINY_TTF（直接读 TTF）或换用转换后的 .bin 字体")
     } else {
-        println("[gallery_cj][字形] 示例文本覆盖完整")
+        /*
+         * ★ 这句话的边界必须写清楚，因为我被它误导过：
+         *   它检验的是**字形覆盖率**（字体的 cmap 里有没有这个字），
+         *   **不等于"画面上一定会显示"**。
+         *   实测：覆盖率报"完整"，而画面上仍有一半汉字是空框 ——
+         *   tiny_ttf 的 cmap 里有该字形，光栅化却没有产出位图。
+         *   所以它只是排查的第一步，不能当作"显示正常"的证据。
+         */
+        println("[gallery_cj][字形] 字形覆盖完整（覆盖 ≠ 能光栅化，未必等于显示正常）")
     }
 
     LvStyle.create().bgColor(SCREEN_BG).bgOpa(255).applyTo(scr)
@@ -197,6 +205,28 @@ main(args: Array<String>) {
         bx += 66
     }
     y += 64
+
+    /* ================= 字体对照：同一句话，内置 CJK vs 当前选中的字体 =================
+     * ★ 这一格是为了把「字形覆盖」与「真的画得出来」分开。
+     *   启动自检查的是前者（字体的 cmap 里有没有这个字），而它**不等于**后者 ——
+     *   实测踩到过：自检报"覆盖完整"，画面上却仍是空框。
+     *   两行并排，肉眼一比就知道当前字体到底生效没有：
+     *     · 两行都正常 → 字体生效，之前的空框是旧二进制或旧截图
+     *     · 上行正常、下行空框 → 当前字体（TTF）根本没被用上
+     *     · 两行都空框 → 内置字体也没这两个字，或是渲染链路的问题
+     *   句子里刻意混入常见字与生僻些的字，便于看出覆盖率差异。
+     */
+    let cF = makeCard(root, y, 96, "font A/B - 上行：内置 CJK 字体；下行：当前选中的字体", cjk)
+    let sBuiltin = LvLabel.create(cF)
+    sBuiltin.setText("运行统计长换行距离稳定标签")
+    sBuiltin.setPos(PAD, 28).setSize(CARD_W - 2 * PAD, 26)
+    LvStyle.create().textColor(BODY_FG).textFont(LvFont.builtin(LvBuiltinFont.Cjk16)).applyTo(sBuiltin)
+
+    let sTtf = LvLabel.create(cF)
+    sTtf.setText("运行统计长换行距离稳定标签")
+    sTtf.setPos(PAD, 58).setSize(CARD_W - 2 * PAD, 26)
+    bodyStyle(sTtf, cjk) /* cjk 即启动时选中的字体（TTF，装不上才退回内置） */
+    y += 104
 
     /* ================= 0) 统计：全 ASCII，保证在任何字体下都看得见 ================= */
     let statCard = makeCard(root, y, 96, "0) stats / 运行统计", cjk)
@@ -316,6 +346,9 @@ main(args: Array<String>) {
     kb.setMode(LVGLCJ_KEYBOARD_MODE_NUMBER)
     kb.setPopovers(true)
     kb.setTextarea(ta)
+    /* ★ 必须显式给尺寸：LVGL 的键盘会**拉伸到父容器宽度**，不给尺寸就变成整行通栏的
+     *   白条（实测踩到，画面上数字键成了横贯整屏的长条）。数字键盘的自然尺寸约 280×176。 */
+    kb.setSize(280, 176)
     kb.setPos(PAD, 90)
 
     let kbLab = LvLabel.create(c7)
@@ -441,6 +474,15 @@ main(args: Array<String>) {
     rt.startThreaded()
 
     println("[gallery_cj] 窗口已启动：19 个控件分 11 张卡片；按住鼠标拖动可滚动")
+    /*
+     * ★ 先把噪音解释掉，免得它看起来像故障：
+     *   「font A/B」那张卡片的**上行是故意用内置 CJK 字体**画的，
+     *   而内置字体只覆盖 1000 常用字 —— 所以控制台里会出现几个
+     *   `glyph dsc. not found`（示例里是 运/长/换/距/离 这几个）。
+     *   那是**预期输出**：这张卡片的用途正是把"缺字"与"不缺字"并排摆出来。
+     *   下行用当前选中的字体（TTF），不会有这些警告。
+     */
+    println("[gallery_cj] 提示：A/B 卡片上行**故意**用内置字体，控制台那几个 glyph 警告是预期的")
     if (staticMode) {
         println("[gallery_cj] --static：动画已全部关闭（用于对照「静止时是否也抖」）")
     }
@@ -485,8 +527,8 @@ main(args: Array<String>) {
                  */
                 let s = "fps ${p.fps}  cpu ${p.cpuPercent}%  refresh ${p.refrTimeMs} ms  draw ${p.drawTimeMs} ms\n" +
                     "flush ${backend.flushCount()}  present ${backend.presentCount()}  " +
-                    "waitTimeout ${backend.waitTimeoutCount()}  objects ${p.objCount}  " +
-                    "anims ${animCountRunning()}  taskQ ${taskQueueSize()}"
+                    "waitTimeout ${backend.waitTimeoutCount()}  staleApply ${backend.staleApplyCount()}  " +
+                    "objects ${p.objCount}  " + "anims ${animCountRunning()}  taskQ ${taskQueueSize()}"
                 perfLine[0] = s
                 stat.setText(s)
 
