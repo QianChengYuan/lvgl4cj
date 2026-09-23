@@ -482,10 +482,12 @@ main(args: Array<String>) {
      *   lvglcj_sdl2_deinit 里会把它们清零（它们是「每次会话」的统计量），
      *   读晚了只会得到 0 —— 上一版就把它当成了"一帧都没呈现"，是个误导性很强的假象。
      */
+    let flushFinal = backend.flushCount()
+    let presentFinal = backend.presentCount()
+    let timeoutFinal = backend.waitTimeoutCount()
     println(
-        "[gallery_cj] counters before close: flush ${backend.flushCount()}  " +
-            "present ${backend.presentCount()}  waitTimeout ${backend.waitTimeoutCount()}  " +
-            "paused ${backend.isPaused()}")
+        "[gallery_cj] counters before close: flush ${flushFinal}  " +
+            "present ${presentFinal}  waitTimeout ${timeoutFinal}  " + "paused ${backend.isPaused()}")
 
     /*
      * ★ 先解注册输入回调，再停主循环。
@@ -501,5 +503,9 @@ main(args: Array<String>) {
     rt.stop(shutdownMode: ShutdownMode.Discard)
     backend.close()
     rt.deinitLvgl()
-    println("[gallery_cj] 已干净退出；渲染帧数 ${backend.presentCount()}，累计点击 ${clicks[0]} 次")
+    /* ★ 这里用退出前存下的值，**不能**再调 backend.presentCount()：
+     *   close() → deinit 会把会话统计清零，在那之后读只会得到 0（上一版就因此报出误导性的
+     *   "渲染帧数 0"，让人误判成"一帧都没呈现"）。 */
+    println(
+        "[gallery_cj] 已干净退出；退出前 flush ${flushFinal} / present ${presentFinal} / waitTimeout ${timeoutFinal}，累计点击 ${clicks[0]} 次")
 }
