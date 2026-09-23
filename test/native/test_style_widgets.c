@@ -935,9 +935,35 @@ int main(void)
         int32_t y2 = (int32_t)lv_obj_get_scroll_y((lv_obj_t *)lvglcj_ptr_of(box));
         CHECK(y2 == y0, "★ 反向滚动回到原位（说明没有累积漂移）");
 
-        /* 内容没超出时滚动被钳制：这是 LVGL 的既有行为，本层如实透传而不是报错 */
+        /* ★★ 边界：滚到尽头就停，不能滚出内容范围（用户实测报过"滚轮超出屏幕"）。
+         *
+         *   判据用 LVGL 自己的算法算出的上限：scroll_top + scroll_bottom
+         *   （与 lv_obj_scroll_by_bounded 内部用的是同一个式子，所以这不是自证：
+         *    它验的是"我们的入口是否走了带边界的那条路"）。
+         *   ★ 这里**没有**做"换回不带边界那条会失败"的负向对照，所以别把本用例
+         *     当成能抓住回归的哨兵 —— 它是"当前行为"的断言。判据本身来自读实现：
+         *     lv_obj_scroll_by 的实现里没有任何边界检查，_bounded 那条先
+         *     update_layout 再按 scroll_top+bottom 钳（两端都钳，见其源码）。 */
+        int32_t ymax = (int32_t)(lv_obj_get_scroll_top((lv_obj_t *)lvglcj_ptr_of(box))
+                                 + lv_obj_get_scroll_bottom((lv_obj_t *)lvglcj_ptr_of(box)));
+        CHECK(lvglcj_obj_scroll_by(box, 0, -100000) == LVGLCJ_OK,
+              "朝一个方向猛滚（远超内容高度），不报错");
+        int32_t yend = (int32_t)lv_obj_get_scroll_y((lv_obj_t *)lvglcj_ptr_of(box));
+        printf("        （上限 scroll_top+bottom = %d，猛滚后 scroll_y = %d）\n",
+               (int)ymax, (int)yend);
+        CHECK(yend == ymax, "★★ 猛滚后停在边界上（不是滚过头露出空白）");
+        CHECK(lvglcj_obj_scroll_by(box, 0, -100000) == LVGLCJ_OK, "再猛滚一次");
+        CHECK((int32_t)lv_obj_get_scroll_y((lv_obj_t *)lvglcj_ptr_of(box)) == yend,
+              "★★ 已在边界上，再滚位置不变（滚不动 == 到头，而不是继续漂）");
+
+        /* 反向同理：滚回顶端后停在 0 */
+        CHECK(lvglcj_obj_scroll_by(box, 0, 100000) == LVGLCJ_OK, "反方向猛滚");
+        CHECK((int32_t)lv_obj_get_scroll_y((lv_obj_t *)lvglcj_ptr_of(box)) == 0,
+              "★★ 反向猛滚停在顶端 0（两侧都钳制）");
+
+        /* 内容不足的容器上滚动什么都不做，也不报错 */
         CHECK(lvglcj_obj_scroll_by(scr, 0, -100) == LVGLCJ_OK,
-              "★ 不可滚动的对象上滚动不报错（钳制，与 LVGL 行为一致）");
+              "★ 不可滚动的对象上滚动不报错（不动而非报错）");
 
         CHECK(lvglcj_obj_delete(box) == LVGLCJ_OK, "删除容器");
     }

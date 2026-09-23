@@ -253,13 +253,15 @@ int32_t lvglcj_obj_clean(int64_t obj);
 int32_t lvglcj_obj_set_pos(int64_t obj, int32_t x, int32_t y);
 int32_t lvglcj_obj_set_size(int64_t obj, int32_t w, int32_t h);
 
-/* 相对当前位置滚动（像素）。内容没超出时被钳制，不报错 —— 与 LVGL 既有行为一致。
+/* 相对当前位置滚动（像素），**带边界**：滚到内容尽头就停，不会露出台面之外的空白
+ * （底层走 lv_obj_scroll_by_bounded；不带边界那条会让滚轮滚过头，实测报过）。
+ * 内容不足以滚动时什么都不做，也不报错。
  *
  * ★ 为什么必须有这个入口：**LVGL 没有"滚轮滚动视图"的原生通路**。
- *   读 lv_indev.c 确认：encoder 型 indep 的 enc_diff 在导航模式走的是
+ *   读 lv_indev.c 确认：encoder 型 indev 的 enc_diff 在导航模式下走的是
  *   lv_group_focus_prev/next（**移动焦点**，不是滚动）；指针型 indev 只认拖动。
  *   所以"滚轮滚动"只能由我们显式调用滚动接口实现：后端收 SDL_MOUSEWHEEL，
- *   示波在读回调里消费并调用本入口。（这也是本项目第一次暴露 scroll 能力。） */
+ *   示例在读回调里消费并调用本入口。（这也是本项目第一次暴露 scroll 能力。） */
 int32_t lvglcj_obj_scroll_by(int64_t obj, int32_t dx, int32_t dy);
 int32_t lvglcj_obj_set_parent(int64_t obj, int64_t parent);
 int32_t lvglcj_obj_align(int64_t obj, int32_t align, int32_t x_ofs, int32_t y_ofs);

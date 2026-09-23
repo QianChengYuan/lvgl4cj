@@ -148,7 +148,17 @@ int32_t lvglcj_obj_set_size(int64_t obj, int32_t w, int32_t h)
 }
 
 /*
- * 滚动。
+ * 滚动（**带边界**）。
+ *
+ * ★★ 必须用 lv_obj_scroll_by_bounded，不能用 lv_obj_scroll_by。
+ *   这是用户实测报上来的："滚轮到内容范围之外还会继续滚，露出空白"。
+ *   读实现确认差异：
+ *     · lv_obj_scroll_by          —— 直接把内容移过去，**不做任何边界检查**；
+ *     · lv_obj_scroll_by_bounded  —— 头文件写着 "dx and dy will be limited
+ *       internally to allow scrolling only on the content area"，实现里也是
+ *       先 update_layout，再按 scroll_top + scroll_bottom 钳到范围内。
+ *   本层要的是"滚轮滚到头就停"，所以用后者；想在拖动中做弹性越界是手势层的事，
+ *   不属于本入口的语义。
  *
  * ★ 必须 LV_ANIM_OFF：带动画时滚动要若干帧才稳定，"滚一下再读回位置"就成了
  *   时序赌局 —— 本项目已经在 roller 的选中值上踩过同一个坑（那里也是关动画）。
@@ -165,7 +175,7 @@ int32_t lvglcj_obj_scroll_by(int64_t obj, int32_t dx, int32_t dy)
     LVGLCJ_HANDLE_GUARD(obj, __func__);
     LVGLCJ_CHECK_LVGL_THREAD_RET();
 
-    lv_obj_scroll_by((lv_obj_t *)lvglcj_ptr_of(obj), dx, dy, LV_ANIM_OFF);
+    lv_obj_scroll_by_bounded((lv_obj_t *)lvglcj_ptr_of(obj), dx, dy, LV_ANIM_OFF);
     return LVGLCJ_OK;
 }
 
