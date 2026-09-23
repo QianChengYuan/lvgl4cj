@@ -116,6 +116,41 @@ int main(int argc, char **argv)
     report_point(im, 400, 240, "screen-middle");
     report_point(im, 16, 8 + 64 + 30, "stats-card-bg");
 
+    /*
+     * ★ 与位置无关的色彩普查：在整幅画面里找那 6 个测试色。
+     *
+     *   为什么需要它：上一轮按固定坐标取样，结果全黑 —— 不是没画，而是**画面滚动了**
+     *   （内容超出屏幕、容器可滚动，指针事件一来就可能位移）。固定坐标的结论会随
+     *   滚动状态翻转，那就不算判据。普查只问"这些颜色在不在画面里"，与布局无关。
+     *   容差 ±8：RGB565 量化会带来几个 LSB 的偏差，实测约 2~3。
+     */
+    {
+        static const int want[6][3] = {
+            {0xFF, 0x3B, 0x30}, {0x34, 0xC7, 0x59}, {0x00, 0x7A, 0xFF},
+            {0xFF, 0xCC, 0x00}, {0xFF, 0x2D, 0x55}, {0xFF, 0xFF, 0xFF},
+        };
+        static const char *names[6] = {"red", "green", "blue", "yellow", "pink", "white"};
+        printf("色彩普查（容差 ±8）：\n");
+        for (int k = 0; k < 6; k++) {
+            long hit = 0;
+            for (int y = 0; y < im->height; y++) {
+                for (int x = 0; x < im->width; x++) {
+                    unsigned long p = XGetPixel(im, x, y);
+                    int r = (int)((p >> 16) & 0xFF), g = (int)((p >> 8) & 0xFF), b = (int)(p & 0xFF);
+                    int dr = r - want[k][0], dg = g - want[k][1], db = b - want[k][2];
+                    if (dr < 0) dr = -dr;
+                    if (dg < 0) dg = -dg;
+                    if (db < 0) db = -db;
+                    if (dr <= 8 && dg <= 8 && db <= 8) {
+                        hit++;
+                    }
+                }
+            }
+            printf("  %-7s 期望 rgb=(%3d,%3d,%3d)  命中 %ld 像素\n", names[k], want[k][0],
+                   want[k][1], want[k][2], hit);
+        }
+    }
+
     XDestroyImage(im);
     XCloseDisplay(d);
     (void)argc;
