@@ -473,6 +473,73 @@ class WidgetTests {
         rt.deinitLvgl()
     }
 
+    // ==================================================== 十三、P1 批次 8：table
+
+    /*
+     * 本用例的中心是**一条更正**：我先前把"表格单元格文本只存指针、不拷贝"
+     * （v8 的旧行为）当成了 v9 的事实。实际是拷贝的。
+     * 代价说明：若按那个错误前提去实现，会多出一套"替 LVGL 持有字符串"的机制，
+     * 并在替换单元格时引入新的释放时序问题 —— 代码量增加、风险增加，
+     * 而收益为零。所以这里把"传临时 String 后立刻丢弃"写进测试钉住。
+     *
+     * 另一条是真正的坑：setCellValue 会自动扩容，负值转 uint32 会变成约 42 亿。
+     */
+    @TestCase
+    func testTableCellCopyAndNegativeIndexGuard(): Unit {
+        let rt = LvglRuntime()
+        let _ = rt.startHeadless(320, 240)
+        let tb = LvTable.create(LvObject.screenActive())
+
+        tb.setCellValue(0, 0, "A1")
+        @Assert(tb.cellValue(0, 0), "A1")
+
+        /* 自动扩容：不必先设行列数 */
+        tb.setCellValue(2, 3, "D3")
+        @Assert(tb.rowCount() >= 3, true)
+        @Assert(tb.columnCount() >= 4, true)
+        @Assert(tb.cellValue(2, 3), "D3")
+
+        /* 取用不扩容：越界抛异常，且不改结构 */
+        let rowsBefore = tb.rowCount()
+        @Assert(throwsLvgl({=> tb.cellValue(99, 0) }), true)
+        @Assert(tb.rowCount(), rowsBefore)
+
+        /* 空单元格是空串，不是异常 */
+        @Assert(tb.cellValue(1, 1), "")
+
+        /* 负索引必须拦：否则"设一格"会变成"申请 42 亿行" */
+        @Assert(throwsLvgl({=> tb.setCellValue(-1, 0, "x") }), true)
+        @Assert(throwsLvgl({=> tb.setCellValue(0, -1, "x") }), true)
+        @Assert(throwsLvgl({=> tb.setRowCount(-1) }), true)
+        @Assert(throwsLvgl({=> tb.setColumnCount(-1) }), true)
+
+        /* 多字节按字节计 */
+        tb.setCellValue(0, 0, "表格")
+        @Assert(tb.cellValue(0, 0), "表格")
+        @Assert(tb.cellValue(0, 0).size, 6)
+
+        tb.setRowCount(2)
+        tb.setColumnCount(2)
+        @Assert(tb.rowCount(), 2)
+        @Assert(tb.columnCount(), 2)
+
+        /* 控制位：合并与裁剪，只验接口可用 */
+        tb.mergeRight(0, 0)
+        tb.unmergeRight(0, 0)
+        tb.setTextCrop(0, 1, true)
+
+        /* 失效句柄：读单元格抛异常，而不是返回空串 */
+        let holder = LvObject.create(LvObject.screenActive())
+        let tb2 = LvTable.create(holder)
+        tb2.setCellValue(0, 0, "x")
+        holder.close()
+        @Assert(throwsLvgl({=> tb2.cellValue(0, 0) }), true)
+        @Assert(throwsLvgl({=> tb2.setCellValue(0, 0, "y") }), true)
+
+        tb.close()
+        rt.deinitLvgl()
+    }
+
     // ==================================================== 六、Canvas（§3.11.2）
 
     /*

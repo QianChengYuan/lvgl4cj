@@ -79,10 +79,10 @@ main() {
 | --- | --- |
 | L1 模块（`src/*.cj`，不含测试） | **19** |
 | C 侧实现（`native/src/*.c`） | **22** |
-| ABI 声明函数 | **254**（已实现 **254**，未实现 **0** —— 自检为「声明与产物完全一致」） |
-| 仓颉侧 `foreign` 声明 | **271** |
-| C 用例 | **10 个可执行 / 520 项检查** |
-| 仓颉测试 | **80 用例（79 通过 / 1 跳过 / 0 失败）** |
+| ABI 声明函数 | **263**（已实现 **263**，未实现 **0** —— 自检为「声明与产物完全一致」） |
+| 仓颉侧 `foreign` 声明 | **280** |
+| C 用例 | **10 个可执行 / 560 项检查** |
+| 仓颉测试 | **81 用例（80 通过 / 1 跳过 / 0 失败）** |
 
 已具备的能力（摘要）：
 
@@ -97,8 +97,9 @@ main() {
   `LvSwitch` / `LvCheckbox` / `LvBar`，P1 批次 2 的 `LvSlider` / `LvArc` /
   `LvLed` / `LvSpinner`，P1 批次 3 的 `LvDropdown`，P1 批次 4 的 `LvLine`，
   P1 批次 5 的 `LvImage`，P1 批次 6 的 `LvRoller`，P1 批次 7 的 `LvTextarea`，
+  P1 批次 8 的 `LvTable`，
   以及 `LvCanvas`（自定义绘制的唯一出口，§3.11.2）。
-  **共 16 个**，P1 清单其余 3 个见「已知边界」
+  **共 17 个**，P1 清单其余 2 个见「已知边界」
 - **可观测性**：`LvDebug`（`objCount` / `memMonitor` / `perfSample` / `dumpTree`）、`LvBench`（性能测量）
 
 ---
@@ -154,11 +155,21 @@ main() {
      canvas 函数**，不含 polygon —— 以头文件为契约记录，故不实现（需要时应走契约变更）。
    另注意颜色参数的**解释方式不一致**：绘制类与 `fillBg` 是 `0xRRGGBB`（高 8 位不解释，
    透明度走 `opa`），而 `setPalette` 是 `0xAARRGGBB`（调色板项自带 alpha）。
-2. **控件 16 个**：`LvObject`（基类）、`LvLabel`、`LvButton`、`LvSwitch`、
+2. **控件 17 个**：`LvObject`（基类）、`LvLabel`、`LvButton`、`LvSwitch`、
    `LvCheckbox`、`LvBar`、`LvSlider`、`LvArc`、`LvLed`、`LvSpinner`、
-   `LvDropdown`、`LvLine`、`LvImage`、`LvRoller`、`LvTextarea`、`LvCanvas`。
-   设计文档 §7.1 的 P1 清单还剩 **3 个**未做，全是复合控件：
-   `chart` `table` `keyboard`。
+   `LvDropdown`、`LvLine`、`LvImage`、`LvRoller`、`LvTextarea`、`LvTable`、`LvCanvas`。
+   设计文档 §7.1 的 P1 清单还剩 **2 个**未做，全是复合控件：
+   `chart` `keyboard`。
+
+   ★ 封装 `table` 时在本项目锁定的 **LVGL v9.2.2** 上发现一个**上游缺陷**：
+   `lv_table_set_column_count` 在**缩小列数**时会解引用 NULL 而段错误
+   （`lv_table.c:280` 的 `if(table->cell_data[idx]->user_data)` 缺 NULL 检查；
+   兄弟函数 `lv_table_set_row_count` 在同样位置**有**该检查 —— 这正是判定
+   它是上游问题而非我们误用的依据）。
+   触发条件平凡到不能不管：**先设一格把表撑开，再把列数调小**。
+   处置：版本是冻结的，不改第三方源码，在 C 层缩小前把所有将被丢弃的格子填成空串
+   （O(丢弃格数)，只在缩小时发生）。回归用例 **`★★ 缩列不崩溃`** 钉住它 ——
+   升级 LVGL 时该用例就是哨兵。
    它们之所以被放在后续批次，不是因为难，而是各自引入**新的值类型**
    （图像描述符、点数组、字符串列表），各带一套所有权问题 —— 需要逐个单独设计。
    在此之前需用原生 API 补齐。

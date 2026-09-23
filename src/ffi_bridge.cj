@@ -503,6 +503,38 @@ foreign func lvglcj_textarea_set_password_mode(ta: Int64, on: Int32): Int32
 
 foreign func lvglcj_textarea_set_max_length(ta: Int64, len: Int32): Int32
 
+/* ---------------- P1 批次 8：table ----------------
+ *
+ * ★ 单元格文本由 LVGL **拷贝**（v9 的文档与实现都确认）。这里记一笔更正：
+ *   曾按 v8 的旧印象判为"只存指针"，若照那个前提设计，会凭空造出一套
+ *   多余的持有机制 —— 这正是每次都回到实现里取证的价值。
+ *
+ * ★ get_cell_value 与 textarea.get_text 同形态（写缓冲 + 返回字节数，传 NULL 只探长度），
+ *   而不是返回内部的 const char*。
+ */
+foreign func lvglcj_table_create(parent: Int64): Int64
+
+foreign func lvglcj_table_set_cell_value(tbl: Int64, row: Int32, col: Int32, txt: CString): Int32
+
+foreign func lvglcj_table_get_cell_value(tbl: Int64, row: Int32, col: Int32, buf: CPointer<UInt8>, size: Int32): Int32
+
+foreign func lvglcj_table_set_row_count(tbl: Int64, rows: Int32): Int32
+
+foreign func lvglcj_table_set_column_count(tbl: Int64, cols: Int32): Int32
+
+foreign func lvglcj_table_get_row_count(tbl: Int64): Int32
+
+foreign func lvglcj_table_get_column_count(tbl: Int64): Int32
+
+foreign func lvglcj_table_add_cell_ctrl(tbl: Int64, row: Int32, col: Int32, ctrl: Int32): Int32
+
+foreign func lvglcj_table_clear_cell_ctrl(tbl: Int64, row: Int32, col: Int32, ctrl: Int32): Int32
+
+/* 控制位取值，与 native/include/lvglcj_bridge.h 的 LVGLCJ_TABLE_CTRL_* 对应。
+ * ★ v9 没有 TEXT_CENTER / TEXT_RIGHT（v8 才有，v9 用样式做对齐）。 */
+public let LVGLCJ_TABLE_CTRL_MERGE_RIGHT: Int32 = 1
+public let LVGLCJ_TABLE_CTRL_TEXT_CROP: Int32 = 2
+
 /* ---------------- Canvas（§3.11.2）：自定义绘制的唯一出口 ----------------
  *
  * ★ 颜色参数的**解释方式在不同函数上不同**，调用方必须看清：

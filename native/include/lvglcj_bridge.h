@@ -722,6 +722,47 @@ int32_t lvglcj_textarea_set_password_mode(int64_t ta, int32_t on);
  * 另注：LVGL 的 lv_textarea_set_text 会**绕过**这个上限（其文档明确写了）。 */
 int32_t lvglcj_textarea_set_max_length(int64_t ta, int32_t len);
 
+/* ============================================ 控件（P1 批次 8：table）
+ *
+ * ★ 所有权：**单元格文本会被拷贝**。这一点曾被我按 v8 的旧印象判为"只存指针"，
+ *   实际 v9 的文档与实现都表明是拷贝：
+ *     文档 —— "It will be copied and saved so this variable is not required after..."
+ *     实现 —— lv_realloc(旧块, 所需长度) 后 copy_cell_txt() 写入。
+ *   所以调用方的字符串在返回后即可释放，本层不需要替 LVGL 持有任何东西。
+ *   （记录这次更正，是因为"table 的单元格不拷贝"是流传很广的旧说法，
+ *     若照它设计，会凭空造出一套多余的持有机制。）
+ *
+ * ★★ 也有一个真的坑：set_cell_value 对**超出当前规模**的行列是**自动扩容**的
+ *   （LVGL 文档明确写了）。配合"负值转 uint32_t 会变成约 42 亿"，
+ *   后果不是越界读，而是直接申请一张 42 亿列的表。故本层必须拦负值。
+ *
+ * ★ 与 image 相反、与 roller 一致：txt == NULL 是**错误**（实现里有 LV_ASSERT_NULL）。
+ */
+int64_t lvglcj_table_create(int64_t parent);
+
+/* 设置单元格文本（会被拷贝）。行/列超出当前规模时自动扩容 —— 这是 LVGL 的既定行为。 */
+int32_t lvglcj_table_set_cell_value(int64_t tbl, int32_t row, int32_t col, const char *txt);
+
+/* 取单元格文本：与 textarea 的 get_text 同一形态（写缓冲 + 返回字节数；传 NULL 只探长度）。
+ * ★ 取用**不做**自动扩容：索引超出当前行列范围直接返回 LVGLCJ_ERR_INVALID_ARGUMENT，
+ *   不会先替你造出一张空表（那会让"读错一格"变成静默改变对象结构）。 */
+int32_t lvglcj_table_get_cell_value(int64_t tbl, int32_t row, int32_t col, char *buf, int32_t size);
+
+/* 行数 / 列数。0 合法（相当于清空）；负数被拒（同上，会转成巨大值）。 */
+int32_t lvglcj_table_set_row_count(int64_t tbl, int32_t rows);
+int32_t lvglcj_table_set_column_count(int64_t tbl, int32_t cols);
+int32_t lvglcj_table_get_row_count(int64_t tbl);
+int32_t lvglcj_table_get_column_count(int64_t tbl);
+
+/* 单元格控制位。★ v9 的枚举只有下面这些 —— v8 里那对 TEXT_CENTER/TEXT_RIGHT
+ * 已经消失（v9 用样式做对齐），照 v8 的用法写会静默失效。 */
+#define LVGLCJ_TABLE_CTRL_MERGE_RIGHT 1 /* 与右边一格合并 */
+#define LVGLCJ_TABLE_CTRL_TEXT_CROP   2 /* 文本超出时裁剪而非换行 */
+/* 注：LVGL 另有 CUSTOM_1..4，是留给应用自己的标记位、LVGL 不做任何处理，
+ * 故不进契约（放进来只会让人以为它们有显示效果）。 */
+int32_t lvglcj_table_add_cell_ctrl(int64_t tbl, int32_t row, int32_t col, int32_t ctrl);
+int32_t lvglcj_table_clear_cell_ctrl(int64_t tbl, int32_t row, int32_t col, int32_t ctrl);
+
 /* ============================================================ §3.11.2 Canvas */
 int64_t lvglcj_canvas_create(int64_t parent);
 int32_t lvglcj_canvas_set_buffer(int64_t canvas, int32_t w, int32_t h);

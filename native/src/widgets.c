@@ -950,3 +950,224 @@ int32_t lvglcj_textarea_set_max_length(int64_t ta, int32_t len)
     lv_textarea_set_max_length((lv_obj_t *)lvglcj_ptr_of(ta), (uint32_t)len);
     return LVGLCJ_OK;
 }
+
+/* ------------------------------------------------------------ table */
+
+int64_t lvglcj_table_create(int64_t parent)
+{
+    return widget_create_common(parent, __func__, lv_table_create, "lv_table_t");
+}
+
+int32_t lvglcj_table_set_cell_value(int64_t tbl, int32_t row, int32_t col, const char *txt)
+{
+    LVGLCJ_HANDLE_GUARD(tbl, __func__);
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    if (txt == NULL) {
+        lvglcj_record_error(LVGLCJ_ERR_INVALID_ARGUMENT, tbl, 0, __func__,
+                            "单元格文本不能为空指针；空单元格请传空串");
+        return LVGLCJ_ERR_INVALID_ARGUMENT;
+    }
+
+    /*
+     * ★★ 负值必须在这里拦下 —— 这一处比"索引越界"严重得多。
+     *
+     *   LVGL 对超出当前规模的行列是**自动扩容**的（文档明确写了 "New rows/columns
+     *   are added automatically if required"）。而负数转成 uint32_t 会变成约 42 亿，
+     *   于是「设一个单元格」就变成「申请一张 42 亿列的表」——
+     *   不是越界读，是当场把内存吃光。校验放在调用点之外就没有意义了。
+     */
+    if (row < 0 || col < 0) {
+        lvglcj_record_error(LVGLCJ_ERR_INVALID_ARGUMENT, tbl, row, __func__,
+                            "行列索引不能为负：LVGL 会自动扩容，负值转 uint32_t 会变成极大值");
+        return LVGLCJ_ERR_INVALID_ARGUMENT;
+    }
+
+    lv_table_set_cell_value((lv_obj_t *)lvglcj_ptr_of(tbl), (uint32_t)row, (uint32_t)col, txt);
+    return LVGLCJ_OK;
+}
+
+int32_t lvglcj_table_get_cell_value(int64_t tbl, int32_t row, int32_t col, char *buf, int32_t size)
+{
+    LVGLCJ_HANDLE_GUARD(tbl, __func__);
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    lv_obj_t *o = (lv_obj_t *)lvglcj_ptr_of(tbl);
+    int32_t rows = (int32_t)lv_table_get_row_count(o);
+    int32_t cols = (int32_t)lv_table_get_column_count(o);
+
+    /*
+     * 取用**不**自动扩容（底层会断言，且语义上也不该由"读"改变对象结构）：
+     * 若这里也放行，"读错一格"会变成静默把表格撑大，之后再读别的格子就已经不是
+     * 原来的表了。宁可报错。
+     */
+    if (row < 0 || col < 0 || row >= rows || col >= cols) {
+        lvglcj_record_error(LVGLCJ_ERR_INVALID_ARGUMENT, tbl, row, __func__,
+                            "索引超出当前行列范围（取用不会自动扩容）");
+        return LVGLCJ_ERR_INVALID_ARGUMENT;
+    }
+
+    const char *txt = lv_table_get_cell_value(o, (uint32_t)row, (uint32_t)col);
+    /*
+     * ★ 这个分支实际到不了：读实现可见 lv_table_get_cell_value 对**空格子**与
+     *   **越界索引**一律返回空串（""，不是 NULL）。保留它只是让"下游解引用空指针"
+     *   不重新成为一种可能，成本为零。
+     *
+     * ★ 也正因为它把"越界"和"空格子"都表达成 ""、从返回值上无从区分，
+     *   本层才坚持自己先判范围：那一步把"读错一格"与"读到了空格子"还给调用方区分开。
+     */
+    if (txt == NULL) {
+        txt = "";
+    }
+    size_t n = strlen(txt);
+
+    if (buf == NULL) {
+        return (int32_t)n; /* 探测用法 */
+    }
+    if (size <= (int32_t)n) {
+        lvglcj_record_error(LVGLCJ_ERR_INVALID_ARGUMENT, tbl, size, __func__,
+                            "缓冲不足：需要 文本字节数+1（含结尾 NUL）；本次未写入任何内容");
+        return LVGLCJ_ERR_INVALID_ARGUMENT;
+    }
+
+    memcpy(buf, txt, n);
+    buf[n] = '\0';
+    return (int32_t)n;
+}
+
+int32_t lvglcj_table_set_row_count(int64_t tbl, int32_t rows)
+{
+    LVGLCJ_HANDLE_GUARD(tbl, __func__);
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    if (rows < 0) {
+        lvglcj_record_error(LVGLCJ_ERR_INVALID_ARGUMENT, tbl, rows, __func__,
+                            "行数不能为负（0 可以，相当于清空）");
+        return LVGLCJ_ERR_INVALID_ARGUMENT;
+    }
+
+    lv_table_set_row_count((lv_obj_t *)lvglcj_ptr_of(tbl), (uint32_t)rows);
+    return LVGLCJ_OK;
+}
+
+/*
+ * ★★ 上游缺陷（LVGL v9.2.2）：把列数**调小**会段错误。gdb 回溯定在
+ *       lv_table_set_column_count          lv_table.c:280
+ *       if(table->cell_data[idx]->user_data)        ← 解引用 NULL
+ *
+ *   成因：cell_data[cell] 只在**该格被设置过**时才分配，未设过的格子是 NULL；
+ *   而缩列时它遍历"将被丢弃的格子"并直接解引用 —— 未设过的格子恰好是 NULL。
+ *   触发条件平凡到不能不管：「先设一格把表撑开，再把列数调小」。
+ *
+ *   ★ 判定这是上游缺陷（而非我们误用）有一条硬证据：
+ *     兄弟函数 lv_table_set_row_count 做同一件事时**有** NULL 检查
+ *         if(table->cell_data[i] && table->cell_data[i]->user_data) { ... }
+ *     而缩列这条路径**没有**。同一文件里两个函数对同一种情况处理不一致。
+ *
+ *   处置：版本是冻结的，不改第三方源码，改为在缩小之前把所有将被丢弃的格子
+ *   填成空串，使 cell_data 不再是 NULL，于是上游那条路径拿到的是合法指针。
+ *   代价是 O(丢弃格数) 次填充，且只在缩小时发生。
+ *   回归用例 testTableShrinkMustNotCrash 钉住它 —— 修复前该处正是段错误。
+ */
+static void table_prefill_cols_to_drop(lv_obj_t *o, int32_t keep_cols)
+{
+    int32_t rows = (int32_t)lv_table_get_row_count(o);
+    int32_t cols = (int32_t)lv_table_get_column_count(o);
+
+    for (int32_t r = 0; r < rows; r++) {
+        for (int32_t c = keep_cols; c < cols; c++) {
+            /*
+             * ★ 这里**无条件**写空串，不先去"判断该格是否为空"。
+             *
+             *   第一版写的是 `if (lv_table_get_cell_value(...) == NULL) { ... }`，
+             *   结果规避没生效、照样段错误。原因是那个判断依据不可靠：
+             *   lv_table_get_cell_value 给出的是**文本视角**的结果，
+             *   而崩溃点看的是 cell_data[cell] 这个**指针**是否为 NULL ——
+             *   两者不是一回事，用前者推后者就是这次出错的地方。
+             *
+             *   而这些格子本来就即将被丢弃，写空串没有语义代价；
+             *   ctrl 与 user_data 也会被 set_cell_value 保留（其实现里先存后恢复），
+             *   所以 user_data 的释放路径不受影响。
+             *   取舍：用"无条件做一件无害的事"换掉"有条件地做一件关键的事" ——
+             *   可靠性优先于省几次内存写。另外目标格仍在当前行列范围内，不会触发自动扩容。
+             */
+            lv_table_set_cell_value(o, (uint32_t)r, (uint32_t)c, "");
+        }
+    }
+}
+
+int32_t lvglcj_table_set_column_count(int64_t tbl, int32_t cols)
+{
+    LVGLCJ_HANDLE_GUARD(tbl, __func__);
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    if (cols < 0) {
+        lvglcj_record_error(LVGLCJ_ERR_INVALID_ARGUMENT, tbl, cols, __func__,
+                            "列数不能为负（0 可以，相当于清空）");
+        return LVGLCJ_ERR_INVALID_ARGUMENT;
+    }
+
+    lv_obj_t *o = (lv_obj_t *)lvglcj_ptr_of(tbl);
+
+    /* 只在缩小（会走到上游那条缺 NULL 检查的路径）时做前置填充。
+     * 扩容路径不涉及释放，无此问题。 */
+    if (cols < (int32_t)lv_table_get_column_count(o)) {
+        table_prefill_cols_to_drop(o, cols);
+    }
+
+    lv_table_set_column_count(o, (uint32_t)cols);
+    return LVGLCJ_OK;
+}
+
+int32_t lvglcj_table_get_row_count(int64_t tbl)
+{
+    LVGLCJ_HANDLE_GUARD(tbl, __func__);
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    return (int32_t)lv_table_get_row_count((lv_obj_t *)lvglcj_ptr_of(tbl));
+}
+
+int32_t lvglcj_table_get_column_count(int64_t tbl)
+{
+    LVGLCJ_HANDLE_GUARD(tbl, __func__);
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    return (int32_t)lv_table_get_column_count((lv_obj_t *)lvglcj_ptr_of(tbl));
+}
+
+/*
+ * 控制位：行/列同样要挡住负值（理由与 set_cell_value 一致 —— 底层收 uint32_t）。
+ * ctrl 本身不做位校验：LVGL 定义的就是"若干位按位或"，未知位它只是存着不处理，
+ * 拦下来反而会让将来新增的位在旧版本里不可用。
+ */
+int32_t lvglcj_table_add_cell_ctrl(int64_t tbl, int32_t row, int32_t col, int32_t ctrl)
+{
+    LVGLCJ_HANDLE_GUARD(tbl, __func__);
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    if (row < 0 || col < 0) {
+        lvglcj_record_error(LVGLCJ_ERR_INVALID_ARGUMENT, tbl, row, __func__,
+                            "行列索引不能为负");
+        return LVGLCJ_ERR_INVALID_ARGUMENT;
+    }
+
+    lv_table_add_cell_ctrl((lv_obj_t *)lvglcj_ptr_of(tbl), (uint32_t)row, (uint32_t)col,
+                           (lv_table_cell_ctrl_t)ctrl);
+    return LVGLCJ_OK;
+}
+
+int32_t lvglcj_table_clear_cell_ctrl(int64_t tbl, int32_t row, int32_t col, int32_t ctrl)
+{
+    LVGLCJ_HANDLE_GUARD(tbl, __func__);
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    if (row < 0 || col < 0) {
+        lvglcj_record_error(LVGLCJ_ERR_INVALID_ARGUMENT, tbl, row, __func__,
+                            "行列索引不能为负");
+        return LVGLCJ_ERR_INVALID_ARGUMENT;
+    }
+
+    lv_table_clear_cell_ctrl((lv_obj_t *)lvglcj_ptr_of(tbl), (uint32_t)row, (uint32_t)col,
+                             (lv_table_cell_ctrl_t)ctrl);
+    return LVGLCJ_OK;
+}

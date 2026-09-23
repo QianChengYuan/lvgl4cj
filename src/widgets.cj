@@ -873,6 +873,169 @@ public class LvTextarea <: LvObject {
     }
 }
 
+/*
+ * ===================== P1 批次 8：table =====================
+ * 所有权上 table 属于**轻**的一类（LVGL 会拷贝单元格文本）。
+ *
+ * ★ 这里更正一个我先前讲错的前提：我曾说"表格单元格文本只存指针、不拷贝"。
+ *   实际 v9 是拷贝的（文档 + 实现双重确认）。若照那个错误前提去做，
+ *   会凭空多造一套"替 LVGL 持有字符串"的机制 —— 既多余，又会在替换单元格时
+ *   引入新的释放时序问题。教训不是"要小心"，而是"不许按库的旧版本印象外推"。
+ *
+ * ★ 真正的坑在 setCellValue：LVGL 对超范围行列**自动扩容**，
+ *   于是负值（转 uint32 变约 42 亿）会让"设一格"变成"申请 42 亿列"。C 侧已拦。
+ */
+
+/// 表格
+public class LvTable <: LvObject {
+    private init(h: Int64) {
+        super(h)
+    }
+
+    /**
+     * 创建一个 table。
+     *
+     * @throws[LvglException] 同 LvSwitch.create
+     */
+    public static func create(parent: LvObject): LvTable {
+        ensureLvglOwnership()
+        let h = unsafe { lvglcj_table_create(parent.handle) }
+        if (h <= 0) {
+            throw LvglException(OutOfMemory, "table 创建失败（LVGL 内存池已满，或未启动显示导致没有默认屏幕）")
+        }
+        return LvTable(h)
+    }
+
+    /**
+     * 设置单元格文本。
+     *
+     * 文本会被 LVGL 拷贝，传入的 String 生命周期不受约束。
+     * 行/列**超出当前规模时会自动扩容**（LVGL 的既定行为）——
+     * 也就是说可以先 setCellValue(2, 3, ...) 再不管规模，表格会自己长到能装下它。
+     *
+     * @throws[LvglException] InvalidArgument —— 行列索引为负
+     */
+    public func setCellValue(row: Int32, col: Int32, txt: String): LvTable {
+        throwIfError(withCString(txt) {
+            cs => unsafe { lvglcj_table_set_cell_value(handle, row, col, cs) }
+        }, "table.setCellValue")
+        return this
+    }
+
+    /**
+     * 取单元格文本。
+     *
+     * 取用**不会**自动扩容：索引超出当前行列范围会抛 InvalidArgument，
+     * 而不是先替你造出一张空表 —— 否则"读错一格"就变成静默改变了对象结构。
+     *
+     * @throws[LvglException] InvalidArgument —— 索引越界或句柄失效
+     */
+    public func cellValue(row: Int32, col: Int32): String {
+        let n = unsafe { lvglcj_table_get_cell_value(handle, row, col, CPointer<UInt8>(), 0) }
+        if (n < 0) {
+            throw LvglException(InvalidArgument, "table.cellValue 失败（索引越界或句柄失效？）")
+        }
+        if (n == 0) {
+            return ""
+        }
+        let len = Int64(n)
+        let buf = Array<UInt8>(len + 1, repeat: 0)
+        let h = unsafe { acquireArrayRawData(buf) }
+        let rc = unsafe { lvglcj_table_get_cell_value(handle, row, col, h.pointer, n + 1) }
+        unsafe { releaseArrayRawData(h) }
+        /* 同 textarea.text：成功时返回的是**字节数**，不能用 throwIfError 判错 */
+        if (rc < 0) {
+            throw LvglException(InvalidArgument, "table.cellValue 失败（错误码 ${rc}）")
+        }
+        return String.fromUtf8(buf[0..len])
+    }
+
+    /**
+     * 设置行数。`0` 合法（相当于清空）。
+     *
+     * @throws[LvglException] InvalidArgument —— 负值
+     */
+    public func setRowCount(rows: Int32): LvTable {
+        throwIfError(unsafe { lvglcj_table_set_row_count(handle, rows) }, "table.setRowCount")
+        return this
+    }
+
+    /**
+     * 设置列数。`0` 合法（相当于清空）。
+     *
+     * @throws[LvglException] InvalidArgument —— 负值
+     */
+    public func setColumnCount(cols: Int32): LvTable {
+        throwIfError(unsafe { lvglcj_table_set_column_count(handle, cols) }, "table.setColumnCount")
+        return this
+    }
+
+    /**
+     * 当前行数
+     *
+     * @throws[LvglException] InvalidArgument —— 句柄失效
+     */
+    public func rowCount(): Int32 {
+        let r = unsafe { lvglcj_table_get_row_count(handle) }
+        if (r < 0) {
+            throw LvglException(InvalidArgument, "table.rowCount 失败")
+        }
+        return r
+    }
+
+    /**
+     * 当前列数
+     *
+     * @throws[LvglException] InvalidArgument —— 句柄失效
+     */
+    public func columnCount(): Int32 {
+        let r = unsafe { lvglcj_table_get_column_count(handle) }
+        if (r < 0) {
+            throw LvglException(InvalidArgument, "table.columnCount 失败")
+        }
+        return r
+    }
+
+    /**
+     * 把 (row, col) 与右边一格合并。
+     *
+     * 合并后右邻格的内容不再显示（但值仍在，取消合并即可复现）。
+     *
+     * @throws[LvglException] InvalidArgument —— 索引为负
+     */
+    public func mergeRight(row: Int32, col: Int32): LvTable {
+        throwIfError(unsafe {
+            lvglcj_table_add_cell_ctrl(handle, row, col, LVGLCJ_TABLE_CTRL_MERGE_RIGHT)
+        }, "table.mergeRight")
+        return this
+    }
+
+    /// 取消与右邻格的合并
+    public func unmergeRight(row: Int32, col: Int32): LvTable {
+        throwIfError(unsafe {
+            lvglcj_table_clear_cell_ctrl(handle, row, col, LVGLCJ_TABLE_CTRL_MERGE_RIGHT)
+        }, "table.unmergeRight")
+        return this
+    }
+
+    /**
+     * 文本超出单元格时裁剪（而不是换行撑高该行）。
+     *
+     * @throws[LvglException] InvalidArgument —— 索引为负
+     */
+    public func setTextCrop(row: Int32, col: Int32, on: Bool): LvTable {
+        /* 不把 foreign func 取成函数值再调用：那是跨 FFI 的一等函数，
+         * 更容易在签名/调用约定上出意外。两个分支各写一次调用，直白且无歧义。 */
+        let rc = if (on) {
+            unsafe { lvglcj_table_add_cell_ctrl(handle, row, col, LVGLCJ_TABLE_CTRL_TEXT_CROP) }
+        } else {
+            unsafe { lvglcj_table_clear_cell_ctrl(handle, row, col, LVGLCJ_TABLE_CTRL_TEXT_CROP) }
+        }
+        throwIfError(rc, "table.setTextCrop")
+        return this
+    }
+}
+
 /// 忙碌指示器
 public class LvSpinner <: LvObject {
     private init(h: Int64) {

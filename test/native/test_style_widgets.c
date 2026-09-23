@@ -652,6 +652,121 @@ int main(void)
         CHECK(lvglcj_handle_state(ta) != LVGLCJ_HSTATE_ALIVE, "删除后不再报告 ALIVE");
     }
 
+    /* ================================================== 7j. P1 批次 8：table
+     *
+     * 本段钉两件事，其中一件是**更正**：
+     *   ① 单元格文本是**拷贝**的（曾按 v8 旧印象误判为只存指针），
+     *      所以传栈上临时串并在调用后覆写它是安全的；
+     *   ② 行列负值必须拦下 —— 因为 LVGL 对超范围行列会**自动扩容**，
+     *      负值转 uint32 会变成约 42 亿，等于当场申请一张 42 亿列的表。
+     */
+    printf("\n-- 7j. P1 批次 8 控件（table）--\n");
+    {
+        int64_t tb = lvglcj_table_create(scr);
+        CHECK(tb != 0, "创建 table");
+
+        char cell[32];
+        strcpy(cell, "A1");
+        CHECK(lvglcj_table_set_cell_value(tb, 0, 0, cell) == LVGLCJ_OK, "设置单元格 (0,0)");
+        memset(cell, 0x5A, sizeof(cell)); /* 覆写调用方缓冲：钉住"拷贝"这条契约 */
+
+        char out[64];
+        memset(out, 0, sizeof(out));
+        CHECK(lvglcj_table_get_cell_value(tb, 0, 0, out, sizeof(out)) == 2, "★ 取回长度 2");
+        CHECK(strcmp(out, "A1") == 0, "★ 内容正确（输入缓冲已被覆写，说明确是拷贝）");
+
+        /* 自动扩容：设 (2,3) 后行列数应自动长到装得下它 */
+        CHECK(lvglcj_table_set_cell_value(tb, 2, 3, "D3") == LVGLCJ_OK, "设置 (2,3)（超出原规模）");
+        CHECK(lvglcj_table_get_row_count(tb) >= 3, "★ 行数已自动扩容到 >= 3");
+        CHECK(lvglcj_table_get_column_count(tb) >= 4, "★ 列数已自动扩容到 >= 4");
+
+        /* 取用不扩容：越界必须报错，而不是静默把表撑大 */
+        CHECK(lvglcj_table_get_cell_value(tb, 99, 0, out, sizeof(out)) == LVGLCJ_ERR_INVALID_ARGUMENT,
+              "★ 取用越界被拒（不会自动扩容）");
+        CHECK(lvglcj_table_get_row_count(tb) >= 3 && lvglcj_table_get_row_count(tb) < 99,
+              "★ 越界取用后行数没被改变（读操作不能改结构）");
+
+        /* 空单元格：长度 0（与失败可区分） */
+        CHECK(lvglcj_table_get_cell_value(tb, 1, 1, out, sizeof(out)) == 0, "空单元格返回长度 0");
+        CHECK(lvglcj_table_get_cell_value(tb, 1, 1, NULL, 0) == 0, "空单元格探测长度也为 0");
+
+        /* 缓冲不足：报错且一个字都不写。
+         * 注意 (0,0) 此刻是 "A1"（2 字节），所以缓冲要取 2 才算"不足"（需要 3 才放得下）。
+         * 第一版这里写了 3，结果它够用、断言失败 —— 是测试算错，不是实现的问题。 */
+        char small[2];
+        memset(small, 0x11, sizeof(small));
+        CHECK(lvglcj_table_get_cell_value(tb, 0, 0, small, (int32_t)sizeof(small))
+                  == LVGLCJ_ERR_INVALID_ARGUMENT,
+              "★ 缓冲不足被拒");
+        CHECK((unsigned char)small[0] == 0x11 && (unsigned char)small[1] == 0x11,
+              "★ 缓冲不足时未写入（哨兵未被破坏）");
+
+        /* 负值：自动扩容 + uint32 转 42 亿 —— 必须拦，
+         * 否则这条断言一旦失败，表现会是"内存被吃光"而不是一条错误码 */
+        CHECK(lvglcj_table_set_cell_value(tb, -1, 0, "x") == LVGLCJ_ERR_INVALID_ARGUMENT,
+              "★ 负行号被拒（否则会申请一张 42 亿行的表）");
+        CHECK(lvglcj_table_set_cell_value(tb, 0, -1, "x") == LVGLCJ_ERR_INVALID_ARGUMENT,
+              "★ 负列号被拒");
+        CHECK(lvglcj_table_set_cell_value(tb, 0, 0, NULL) == LVGLCJ_ERR_INVALID_ARGUMENT,
+              "NULL 文本被拒（与 roller 一致、与 image 相反）");
+        CHECK(lvglcj_table_set_row_count(tb, -1) == LVGLCJ_ERR_INVALID_ARGUMENT, "负行数被拒");
+        CHECK(lvglcj_table_set_column_count(tb, -1) == LVGLCJ_ERR_INVALID_ARGUMENT, "负列数被拒");
+        CHECK(lvglcj_table_add_cell_ctrl(tb, -1, 0, LVGLCJ_TABLE_CTRL_MERGE_RIGHT)
+                  == LVGLCJ_ERR_INVALID_ARGUMENT,
+              "负索引的控制位操作被拒");
+
+        /* 显式设置行列数（0 = 清空，合法） */
+        CHECK(lvglcj_table_set_row_count(tb, 2) == LVGLCJ_OK, "设置行数 2");
+        CHECK(lvglcj_table_set_column_count(tb, 2) == LVGLCJ_OK, "设置列数 2");
+        CHECK(lvglcj_table_get_row_count(tb) == 2 && lvglcj_table_get_column_count(tb) == 2,
+              "★ 行列数为所设值");
+
+        /* ================================================================
+         * ★★ 上游缺陷回归：缩列时未设过的格子会让 LVGL 解引用 NULL
+         *
+         *   修复前这一整段是**段错误**（gdb 定在 lv_table.c:280，
+         *   if(table->cell_data[idx]->user_data) 缺 NULL 检查）。
+         *   触发形状刻意取最平凡的：把表撑开、**只设一格**、其余留空，然后缩列。
+         *   若哪天升级 LVGL 后这里又崩，说明规避被去掉而缺陷仍在。
+         * ================================================================ */
+        CHECK(lvglcj_table_set_row_count(tb, 3) == LVGLCJ_OK, "（回归前置）行数 3");
+        CHECK(lvglcj_table_set_column_count(tb, 3) == LVGLCJ_OK, "（回归前置）列数 3");
+        CHECK(lvglcj_table_set_cell_value(tb, 0, 0, "only") == LVGLCJ_OK,
+              "（回归前置）只设一格，其余保持未设（即 NULL）");
+        CHECK(lvglcj_table_set_column_count(tb, 1) == LVGLCJ_OK,
+              "★★ 缩列不崩溃（上游 v9.2.2 此处缺 NULL 检查，见 C 侧 table_prefill_cols_to_drop）");
+        CHECK(lvglcj_table_get_column_count(tb) == 1, "缩列后列数正确");
+        CHECK(lvglcj_table_set_column_count(tb, 0) == LVGLCJ_OK, "继续缩到 0 列（清空）");
+
+        /* 合并（控制位）：只验证接口可用，合并的渲染效果属端到端场景 */
+        CHECK(lvglcj_table_add_cell_ctrl(tb, 0, 0, LVGLCJ_TABLE_CTRL_MERGE_RIGHT) == LVGLCJ_OK,
+              "合并 (0,0) 与右邻格");
+        CHECK(lvglcj_table_clear_cell_ctrl(tb, 0, 0, LVGLCJ_TABLE_CTRL_MERGE_RIGHT) == LVGLCJ_OK,
+              "取消合并");
+        CHECK(lvglcj_table_add_cell_ctrl(tb, 0, 1, LVGLCJ_TABLE_CTRL_TEXT_CROP) == LVGLCJ_OK,
+              "文本裁剪控制位");
+
+        /* 中文按字节计 */
+        CHECK(lvglcj_table_set_cell_value(tb, 0, 0, "表格") == LVGLCJ_OK, "设置中文单元格");
+        CHECK(lvglcj_table_get_cell_value(tb, 0, 0, out, sizeof(out)) == 6,
+              "★ 2 个汉字 = 6 字节");
+
+        /* 清空：0 行 */
+        CHECK(lvglcj_table_set_row_count(tb, 0) == LVGLCJ_OK, "行数设为 0（清空）");
+        CHECK(lvglcj_table_get_row_count(tb) == 0, "★ 行数为 0");
+
+        /* 失效句柄 */
+        int64_t holder = lvglcj_obj_create(scr);
+        int64_t tb2 = lvglcj_table_create(holder);
+        CHECK(lvglcj_obj_delete(holder) == LVGLCJ_OK, "删除父对象");
+        CHECK(lvglcj_handle_state(tb2) == LVGLCJ_HSTATE_INVALIDATED, "★ table 句柄级联失效");
+        CHECK(lvglcj_table_get_cell_value(tb2, 0, 0, out, sizeof(out)) < 0,
+              "★ 失效句柄取单元格返回负错误码");
+
+        CHECK(lvglcj_obj_delete(tb) == LVGLCJ_OK, "删除 table");
+        CHECK(lvglcj_handle_state(tb) != LVGLCJ_HSTATE_ALIVE, "删除后不再报告 ALIVE");
+    }
+
     /* ================================================== 8. 清理顺序 */
     printf("\n-- 8. 清理 --\n");
     /*
