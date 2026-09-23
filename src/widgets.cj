@@ -518,6 +518,73 @@ public class LvDropdown <: LvObject {
     }
 }
 
+/*
+ * ===================== P1 批次 4：line（§7.1）=====================
+ * line 引入**第二类所有权**：LVGL **不拷贝点数组**，只保存我们给的地址。
+ * 因此 C 侧把坐标复制进自己的缓冲、随对象释放 —— 与 Canvas 的像素缓冲同一套模式。
+ * 对 L1 使用者的影响：传进去的数组可以立刻丢弃，不需要一直持有（这一点写在下面对注释里）。
+ */
+
+/// 折线
+public class LvLine <: LvObject {
+    private init(h: Int64) {
+        super(h)
+    }
+
+    /**
+     * 创建一个 line。**创建后必须先 setPoints 才有内容可画**
+     * （与 Canvas 必须先 setBuffer 同理）。
+     *
+     * @throws[LvglException] 同 LvSwitch.create
+     */
+    public static func create(parent: LvObject): LvLine {
+        ensureLvglOwnership()
+        let h = unsafe { lvglcj_line_create(parent.handle) }
+        if (h <= 0) {
+            throw LvglException(OutOfMemory, "line 创建失败（LVGL 内存池已满，或未启动显示导致没有默认屏幕）")
+        }
+        return LvLine(h)
+    }
+
+    /**
+     * 设置点集。
+     *
+     * `xy` 是**扁平的坐标对**：`x0,y0,x1,y1,...` ——
+     * 长度必须是偶数且至少 2（即至少一个点）。
+     *
+     * 为什么不是 `Array<(Int32, Int32)>`：元组数组跨 FFI 需要一次内存布局假设，
+     * 而扁平数组没有这个问题，且与 C 侧契约逐字对应。
+     *
+     * ★ 坐标会被**复制**到 C 侧缓冲，因此传入的数组可以随即释放 ——
+     *   不需要像某些绑定那样要求调用方长期持有它。
+     *
+     * @throws[LvglException] InvalidArgument —— 元素个数为奇数或少于 2
+     */
+    public func setPoints(xy: Array<Int32>): LvLine {
+        /* L1 就拦住形态错误：C 侧只知道"点的个数"，看不出坐标对是否成对 */
+        if (xy.size < 2 || xy.size % 2 != 0) {
+            throw LvglException(InvalidArgument, "点集必须是扁平的坐标对 x0,y0,x1,y1,...（偶数个元素且至少 2 个）")
+        }
+        let n = Int32(xy.size / 2)
+        let h = unsafe { acquireArrayRawData(xy) }
+        let rc = unsafe { lvglcj_line_set_points(handle, h.pointer, n) }
+        unsafe { releaseArrayRawData(h) }
+        throwIfError(rc, "line.setPoints")
+        return this
+    }
+
+    /// y 轴反向（LVGL 默认 y 向下增长；画折线图常需翻转）
+    public func setYInvert(on: Bool): LvLine {
+        let v: Int32 = if (on) {
+            1
+        } else {
+            0
+        }
+        throwIfError(unsafe { lvglcj_line_set_y_invert(handle, v) }, "line.setYInvert")
+        return this
+    }
+}
+
 /// 忙碌指示器
 public class LvSpinner <: LvObject {
     private init(h: Int64) {

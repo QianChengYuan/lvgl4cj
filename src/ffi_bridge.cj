@@ -431,6 +431,22 @@ foreign func lvglcj_dropdown_get_selected(dd: Int64): Int32
 
 foreign func lvglcj_dropdown_get_option_count(dd: Int64): Int32
 
+/* ---------------- P1 批次 4：line（§7.1）----------------
+ *
+ * ★★ line 是**第二类所有权**：LVGL **不拷贝点数组**，只保存我们给的地址
+ *   （文档原文："Only the address is saved, so the array needs to be alive
+ *   while the line exists"）。因此 C 侧会把坐标复制进一块自己的缓冲、
+ *   随对象释放 —— 调用方传入的数组可以随即销毁。
+ *   这与 Canvas 的像素缓冲是同一套模式（LVGL 持指针 + 我们负责生命周期）。
+ *
+ * ★ xy 是**扁平坐标对**（x0,y0,x1,y1,...），point_count 是**点的个数**而非元素个数。
+ */
+foreign func lvglcj_line_create(parent: Int64): Int64
+
+foreign func lvglcj_line_set_points(line: Int64, xy: CPointer<Int32>, point_count: Int32): Int32
+
+foreign func lvglcj_line_set_y_invert(line: Int64, on: Int32): Int32
+
 /* ---------------- Canvas（§3.11.2）：自定义绘制的唯一出口 ----------------
  *
  * ★ 颜色参数的**解释方式在不同函数上不同**，调用方必须看清：

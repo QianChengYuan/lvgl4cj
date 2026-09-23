@@ -17,6 +17,21 @@
  */
 #include "lvglcj_internal.h"
 
+/*
+ * ★ line 的点集要用 malloc/free（LVGL 不拷贝点数组，缓冲归我们持有），
+ *   所以这里必须显式包含 stdlib.h。
+ *
+ *   不包含时 gcc 只给 "implicit declaration of function 'calloc'" 这类**告警**，
+ *   编译照样通过 —— 但隐式声明的返回值被当作 int，**64 位上会截断指针**。
+ *   也就是说：一条被忽略的告警 = 一个只在大分配量下才现形的悬空指针。
+ *
+ *   这已经是第二次遇到（第一次在 native/src/canvas.c）：凡是新引入 malloc/free
+ *   的文件都会踩一次。更好的做法是把它放进 lvglcj_internal.h 让所有 C 文件共享，
+ *   那样这类问题就不存在"忘记包含"的可能 —— 列为待办，不在此处顺手改，
+ *   因为改内部头会影响全部 22 个 C 文件，应当单独验证一次。
+ */
+#include <stdlib.h>
+
 /* ------------------------------------------------------------ label */
 
 int64_t lvglcj_label_create(int64_t parent)
@@ -588,4 +603,98 @@ int32_t lvglcj_dropdown_get_option_count(int64_t dd)
     LVGLCJ_CHECK_LVGL_THREAD_RET();
 
     return (int32_t)lv_dropdown_get_option_count((lv_obj_t *)lvglcj_ptr_of(dd));
+}
+
+/* ------------------------------------------------------------ line */
+
+/*
+ * ★ line 与 canvas 是同一类：**LVGL 只保存地址，生命周期由我们负责**。
+ *   LVGL 的 set_points 注释明写 "Only the address is saved, so the array needs
+ *   to be alive while the line exists" —— 所以点数组必须由 C 侧持有。
+ *   做法与 canvas 的像素缓冲完全一致（复用同一模式，不再另创一套）：
+ *     · 指针存在**对象自身的 user_data** 里（没有容量上限这回事）
+ *     · DELETE 时 free
+ *     · 重设时先 free 旧的（否则旧的那块必然泄漏）
+ */
+static void line_free_points(lv_obj_t *obj)
+{
+    void *p = lv_obj_get_user_data(obj);
+    if (p != NULL) {
+        free(p);
+        lv_obj_set_user_data(obj, NULL);
+    }
+}
+
+static void line_delete_hook(lv_event_t *e)
+{
+    lv_obj_t *o = (lv_obj_t *)lv_event_get_target(e);
+    if (o != NULL) {
+        line_free_points(o);
+    }
+}
+
+int64_t lvglcj_line_create(int64_t parent)
+{
+    int64_t h = widget_create_common(parent, __func__, lv_line_create, "lv_line_t");
+    if (h == LVGLCJ_HANDLE_NULL) {
+        return LVGLCJ_HANDLE_NULL;
+    }
+    /* 与 canvas 同理：释放钩子在 create 时挂上，避免"挂没挂过"这种状态 */
+    (void)lv_obj_add_event_cb((lv_obj_t *)lvglcj_ptr_of(h), line_delete_hook, LV_EVENT_DELETE,
+                              NULL);
+    return h;
+}
+
+int32_t lvglcj_line_set_points(int64_t line, const int32_t *xy, int32_t point_count)
+{
+    LVGLCJ_HANDLE_GUARD(line, __func__);
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    if (xy == NULL) {
+        lvglcj_record_error(LVGLCJ_ERR_INVALID_ARGUMENT, line, 0, __func__,
+                            "坐标数组为 NULL");
+        return LVGLCJ_ERR_INVALID_ARGUMENT;
+    }
+    if (point_count <= 0) {
+        lvglcj_record_error(LVGLCJ_ERR_INVALID_ARGUMENT, line, point_count, __func__,
+                            "点集至少要有 1 个点");
+        return LVGLCJ_ERR_INVALID_ARGUMENT;
+    }
+    int64_t bytes = (int64_t)point_count * (int64_t)sizeof(lv_point_precise_t);
+    if (bytes > (int64_t)INT32_MAX) {
+        lvglcj_record_error(LVGLCJ_ERR_INVALID_ARGUMENT, line, point_count, __func__,
+                            "点集过大（超过 2GB）");
+        return LVGLCJ_ERR_INVALID_ARGUMENT;
+    }
+
+    lv_obj_t *o = (lv_obj_t *)lvglcj_ptr_of(line);
+
+    /* ★ 重设先释放旧点集 —— 改数据是常见操作，漏这一步必定泄漏 */
+    line_free_points(o);
+
+    lv_point_precise_t *pts = (lv_point_precise_t *)calloc((size_t)bytes, 1);
+    if (pts == NULL) {
+        lvglcj_record_error(LVGLCJ_ERR_OUT_OF_MEMORY, line, point_count, __func__,
+                            "点集分配失败");
+        return LVGLCJ_ERR_OUT_OF_MEMORY;
+    }
+    /* 扁平 int32 坐标对 → lv_point_precise_t（成员类型随上游配置，故在此转换一次，
+     * 不把它的布局暴露到 ABI 上，见桥接头说明） */
+    for (int32_t i = 0; i < point_count; i++) {
+        pts[i].x = xy[i * 2];
+        pts[i].y = xy[i * 2 + 1];
+    }
+
+    lv_obj_set_user_data(o, pts);
+    lv_line_set_points(o, pts, (uint32_t)point_count);
+    return LVGLCJ_OK;
+}
+
+int32_t lvglcj_line_set_y_invert(int64_t line, int32_t on)
+{
+    LVGLCJ_HANDLE_GUARD(line, __func__);
+    LVGLCJ_CHECK_LVGL_THREAD_RET();
+
+    lv_line_set_y_invert((lv_obj_t *)lvglcj_ptr_of(line), on ? true : false);
+    return LVGLCJ_OK;
 }

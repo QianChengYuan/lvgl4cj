@@ -592,6 +592,34 @@ int32_t lvglcj_dropdown_get_selected(int64_t dd);
 /* 选项个数；同样负数是错误码 */
 int32_t lvglcj_dropdown_get_option_count(int64_t dd);
 
+/* ============================================ 控件（P1 批次 4：line）
+ *
+ * ★★ line 与 dropdown 的本质区别：**LVGL 不拷贝点数组**。
+ *   它的文档明写 "Only the address is saved, so the array needs to be alive
+ *   while the line exists"。也就是说这是一类**新的所有权问题**：
+ *   LVGL 持有我们给的地址，生命周期由**我们**负责。
+ *
+ *   这与 Canvas 的像素缓冲属于同一类（那里也是"只给尺寸、缓冲由我们持有"），
+ *   因此**复用同一套模式**而不是另创一个：
+ *     指针存在对象自身的 user_data 里（无容量问题）→ DELETE 时释放 →
+ *     重设时先释放旧的。
+ *
+ * ★ 为什么 ABI 收**扁平的 int32 坐标对**（x0,y0,x1,y1,...）而不是点结构体数组：
+ *   LVGL 的 lv_point_precise_t 成员类型取决于其配置（可能是 float），
+ *   把它的内存布局摆到 ABI 上，会让契约随上游配置漂移 —— 那是我们不想要的耦合。
+ *   int32 坐标对是稳定的，转换在 C 侧做一次。
+ */
+int64_t lvglcj_line_create(int64_t parent);
+
+/* 设置点集。
+ *   xy          : x0,y0,x1,y1,... 共 point_count 对（**不是**字节数）
+ *   point_count : 点的个数，必须 ≥ 1
+ * 点坐标会被**复制**到 C 侧持有的缓冲里，因此调用方的数组可以随即释放。 */
+int32_t lvglcj_line_set_points(int64_t line, const int32_t *xy, int32_t point_count);
+
+/* y 轴反向（非 0 = 反向）。LVGL 的默认坐标系向下增长，画折线图时常需要翻转 */
+int32_t lvglcj_line_set_y_invert(int64_t line, int32_t on);
+
 /* ============================================================ §3.11.2 Canvas */
 int64_t lvglcj_canvas_create(int64_t parent);
 int32_t lvglcj_canvas_set_buffer(int64_t canvas, int32_t w, int32_t h);

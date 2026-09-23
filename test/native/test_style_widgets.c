@@ -432,6 +432,49 @@ int main(void)
         CHECK(lvglcj_obj_delete(dd) == LVGLCJ_OK, "删除 dropdown");
     }
 
+    /* ================================================== 7f. P1 批次 4：line
+     *
+     * line 是**第二类所有权**：LVGL 不拷贝点数组，只保存我们给的地址。
+     * 所以本段最要紧的就是把"我们持有"这件事的两条路径都走一遍：
+     *   · 重设点集（必须先释放旧的那块）
+     *   · 删除对象（DELETE 钩子释放）
+     * 二者若有闪失，就是泄漏或重复释放 —— 这正是 ASan 能精确抓到的类别。
+     */
+    printf("\n-- 7f. P1 批次 4 控件（line）--\n");
+    {
+        int64_t ln = lvglcj_line_create(scr);
+        CHECK(ln != 0, "创建 line");
+
+        /* 扁平坐标对：3 个点 */
+        const int32_t pts[6] = { 0, 0, 10, 20, 30, 0 };
+        CHECK(lvglcj_line_set_points(ln, pts, 3) == LVGLCJ_OK, "设置 3 个点");
+        CHECK(lvglcj_line_set_y_invert(ln, 1) == LVGLCJ_OK, "y 轴反向开");
+        CHECK(lvglcj_line_set_y_invert(ln, 0) == LVGLCJ_OK, "y 轴反向关");
+
+        CHECK(lvglcj_line_set_points(ln, NULL, 3) == LVGLCJ_ERR_INVALID_ARGUMENT,
+              "坐标数组为 NULL 被拒");
+        CHECK(lvglcj_line_set_points(ln, pts, 0) == LVGLCJ_ERR_INVALID_ARGUMENT,
+              "点个数为 0 被拒");
+        CHECK(lvglcj_line_set_points(ln, pts, -1) == LVGLCJ_ERR_INVALID_ARGUMENT,
+              "点个数为负被拒");
+
+        /* ★ 重设点集：内部先释放旧的那块，ASan 会在这里报泄漏 */
+        const int32_t pts2[4] = { 0, 0, 5, 5 };
+        CHECK(lvglcj_line_set_points(ln, pts2, 2) == LVGLCJ_OK, "★ 重设点集（旧的先释放）");
+        /* 再来一次，确保反复重设也不漏 */
+        CHECK(lvglcj_line_set_points(ln, pts, 3) == LVGLCJ_OK, "★ 再次重设点集");
+
+        int64_t holder = lvglcj_obj_create(scr);
+        int64_t ln2 = lvglcj_line_create(holder);
+        CHECK(lvglcj_line_set_points(ln2, pts, 3) == LVGLCJ_OK, "挂到父对象上的 line");
+        CHECK(lvglcj_obj_delete(holder) == LVGLCJ_OK, "删除父对象");
+        CHECK(lvglcj_handle_state(ln2) == LVGLCJ_HSTATE_INVALIDATED, "★ line 句柄级联失效");
+
+        /* ★ 删除自身：DELETE 钩子释放点数组；ASan 会报出泄漏或重复释放 */
+        CHECK(lvglcj_obj_delete(ln) == LVGLCJ_OK, "★ 删除 line（点集随之释放）");
+        CHECK(lvglcj_handle_state(ln) != LVGLCJ_HSTATE_ALIVE, "删除后不再报告 ALIVE");
+    }
+
     /* ================================================== 8. 清理顺序 */
     printf("\n-- 8. 清理 --\n");
     /*

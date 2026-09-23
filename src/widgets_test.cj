@@ -296,6 +296,44 @@ class WidgetTests {
         rt.deinitLvgl()
     }
 
+    // ==================================================== 九、P1 批次 4：line
+
+    /*
+     * line 是**第二类所有权**（LVGL 不拷贝点数组、只保存地址）。
+     * L1 层要钉住的是这一层自己的责任：**形态校验**。
+     * C 侧只知道"点的个数"，看不出坐标对是否成对 ——
+     * 传进奇数个元素时，C 侧会把它当成 floor(n/2) 个点而**静默丢掉最后一个**。
+     * 所以奇数长度必须在 L1 就拦住，而不是让它变成一个画得不太对的折线。
+     */
+    @TestCase
+    func testLinePointsAndShapeValidation(): Unit {
+        let rt = LvglRuntime()
+        let _ = rt.startHeadless(320, 240)
+        let ln = LvLine.create(LvObject.screenActive())
+
+        /* 三个点：(0,0) (10,20) (30,0) */
+        ln.setPoints([0, 0, 10, 20, 30, 0])
+        ln.setYInvert(true)
+        ln.setYInvert(false)
+        /* 重设点集：旧的那块由 C 侧释放（泄漏会被 ASan 抓到） */
+        ln.setPoints([0, 0, 5, 5])
+
+        /* ★ 形态校验：奇数个元素必须被拦下，而不是静默丢掉最后一个坐标 */
+        @Assert(throwsLvgl({=> ln.setPoints([0, 0, 5]) }), true)
+        /* 少于一个点也必须被拦下 */
+        @Assert(throwsLvgl({=> ln.setPoints([]) }), true)
+
+        /* 删除后操作必须抛错 */
+        let holder = LvObject.create(LvObject.screenActive())
+        let ln2 = LvLine.create(holder)
+        ln2.setPoints([0, 0, 1, 1])
+        holder.close()
+        @Assert(throwsLvgl({=> ln2.setPoints([0, 0, 1, 1]) }), true)
+
+        ln.close()
+        rt.deinitLvgl()
+    }
+
     // ==================================================== 六、Canvas（§3.11.2）
 
     /*
